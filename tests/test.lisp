@@ -80,6 +80,18 @@
     (check (string= "abcx    " (first (screen-lines terminal)))
            "CSI device attributes reset the terminal unexpectedly.")))
 
+(deftest terminal-exits-osc-at-ascii-bell ()
+  (let* ((terminal (make-terminal-emulator :width 20 :height 3))
+         (escape (string #\Escape))
+         ;; ASCII BEL ends an OSC sequence.
+         (text (concatenate 'string
+                            escape "]0;title"
+                            (string (code-char 7))
+                            "prompt")))
+    (feed-terminal terminal text)
+    (check (search "prompt" (first (screen-lines terminal)))
+           "OSC does not end at ASCII BEL.")))
+
 (deftest terminal-erases-from-cursor-to-line-end ()
   (let ((terminal (make-terminal-emulator :width 8 :height 2)))
     (feed-terminal terminal (format nil "abcdef~C[3G~C[K" #\Escape #\Escape))

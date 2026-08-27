@@ -1,5 +1,7 @@
 (in-package #:lispore.terminal)
 
+(defconstant +ascii-bell-code+ 7)
+
 (defstruct (screen-cell
             (:constructor make-screen-cell (character style)))
   (character #\Space :type character)
@@ -335,16 +337,17 @@
        (#\Tab (setf (cursor-column terminal)
                      (min (terminal-width terminal)
                           (* 8 (1+ (floor (cursor-column terminal) 8))))))
-       (#\Bell nil)
        (otherwise
-        (when (>= (char-code character) #x20)
-          (put-character terminal character)))))
+        (unless (= (char-code character) +ascii-bell-code+)
+          (when (>= (char-code character) #x20)
+            (put-character terminal character))))))
     (:escape (feed-escape-character terminal character))
     (:escape-intermediate (setf (parser-state terminal) :ground))
     (:csi (feed-csi-character terminal character))
     (:osc
      (cond
-       ((char= character #\Bell)
+       ;; SBCL names Unicode U+1F514 "Bell".
+       ((= (char-code character) +ascii-bell-code+)
         (setf (parser-state terminal) :ground))
        ((char= character #\Escape)
         (setf (parser-state terminal) :osc-escape))))
