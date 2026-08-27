@@ -22,5 +22,9 @@ build/
 coverage/
 *.tsbuildinfo
 
+# Skill
+.agents/
+skills-lock.json
+
 # Generated dependency tree.
 ocicl/
