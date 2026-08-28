@@ -1,6 +1,7 @@
 (in-package #:lispore.terminal)
 
 (defconstant +ascii-bell-code+ 7)
+(defparameter *default-status-line-text* " lispore | shell ")
 
 (defstruct (screen-cell
             (:constructor make-screen-cell (character style)))
@@ -83,6 +84,39 @@
   "Return the emulator size as width and height values."
   (values (terminal-width terminal)
           (terminal-height terminal)))
+
+(defun copy-terminal (terminal)
+  "Return an independent copy of TERMINAL's retained screen state."
+  (let ((copy (make-terminal-emulator
+               :width (terminal-width terminal)
+               :height (terminal-height terminal)
+               :content-height (terminal-content-height terminal))))
+    (setf (terminal-cells copy)
+          (make-array
+           (length (terminal-cells terminal))
+           :initial-contents
+           (loop for row across (terminal-cells terminal)
+                 collect (make-array
+                          (length row)
+                          :initial-contents
+                          (loop for cell across row
+                                collect (let ((cell-copy (copy-screen-cell cell)))
+                                          (setf (screen-cell-style cell-copy)
+                                                (copy-list (screen-cell-style cell)))
+                                          cell-copy)))))
+          (terminal-status-line copy)
+          (and (terminal-status-line terminal)
+               (copy-seq (terminal-status-line terminal)))
+          (cursor-row copy) (cursor-row terminal)
+          (cursor-column copy) (cursor-column terminal)
+          (current-style copy) (copy-list (current-style terminal))
+          (saved-row copy) (saved-row terminal)
+          (saved-column copy) (saved-column terminal)
+          (saved-style copy) (copy-list (saved-style terminal))
+          (parser-state copy) (parser-state terminal)
+          (csi-buffer copy) (copy-seq (csi-buffer terminal))
+          (osc-escape-p copy) (osc-escape-p terminal))
+    copy))
 
 (defun draw-status-line (terminal)
   "Draw TERMINAL's status line in its reserved bottom row."

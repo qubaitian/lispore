@@ -52,7 +52,9 @@
 (defpackage #:lispore.terminal
   (:use #:cl)
   (:export
+   #:*default-status-line-text*
    #:cell-at
+   #:copy-terminal
    #:feed-terminal
    #:make-terminal-emulator
    #:render-terminal
@@ -64,6 +66,57 @@
    #:terminal-emulator
    #:terminal-size
    #:cursor-position))
+
+(defpackage #:lispore.session
+  (:use #:cl)
+  (:import-from #:bordeaux-threads
+                #:acquire-lock
+                #:condition-notify
+                #:condition-wait
+                #:current-thread
+                #:join-thread
+                #:make-condition-variable
+                #:make-lock
+                #:make-thread
+                #:release-lock
+                #:with-lock-held)
+  (:import-from #:lispore.pty
+                #:close-session
+                #:read-output-bytes
+                #:start-shell
+                #:write-input)
+  (:import-from #:lispore.terminal
+                #:*default-status-line-text*
+                #:copy-terminal
+                #:feed-terminal
+                #:make-terminal-emulator
+                #:set-status-line)
+  (:import-from #:lispore.utf8
+                #:decode-utf8-chunk)
+  (:export
+   #:attach-session
+   #:attachment
+   #:attachment-mode
+   #:attachment-session
+   #:attachment-start-screen
+   #:attachment-screen
+   #:attachment-attached-p
+   #:close-session-manager
+   #:detach
+   #:input-draft
+   #:lookup-session
+   #:make-session-manager
+   #:read-attachment
+   #:retained-screen
+   #:restore-session
+   #:reattach-session
+   #:session-running-p
+   #:session-error
+   #:session-id
+   #:terminate-session
+   #:set-input-draft
+   #:start-session
+   #:submit-input))
 
 (defpackage #:lispore.frontend
   (:use #:cl)
@@ -87,13 +140,21 @@
                 #:start-shell
                 #:wait-for-session
                 #:write-input)
+  (:import-from #:lispore.session
+                #:attachment-mode
+                #:attachment-start-screen
+                #:detach
+                #:read-attachment
+                #:submit-input)
   (:import-from #:lispore.terminal
+                #:*default-status-line-text*
                 #:feed-terminal
                 #:make-terminal-emulator
                 #:render-terminal
                 #:resize-terminal
                 #:set-status-line)
   (:import-from #:lispore.utf8
+                #:decode-utf8-chunk
                 #:encode-utf8)
   (:export
    #:interactive-shell
@@ -118,7 +179,30 @@
                 #:start-shell
                 #:wait-for-session
                 #:write-input)
+  (:import-from #:lispore.session
+                #:attach-session
+                #:attachment-mode
+                #:attachment-session
+                #:attachment-screen
+                #:attachment-attached-p
+                #:close-session-manager
+                #:detach
+                #:input-draft
+                #:lookup-session
+                #:make-session-manager
+                #:read-attachment
+                #:retained-screen
+                #:restore-session
+                #:reattach-session
+                #:session-running-p
+                #:session-error
+                #:session-id
+                #:set-input-draft
+                #:start-session
+                #:terminate-session
+                #:submit-input)
   (:import-from #:lispore.terminal
+                #:*default-status-line-text*
                 #:cell-at
                 #:feed-terminal
                 #:make-terminal-emulator
@@ -132,18 +216,32 @@
                 #:terminal-size
                 #:cursor-position)
   (:export
+   #:attach-session
+   #:attachment-attached-p
+   #:attachment-mode
+   #:attachment-screen
+   #:attachment-session
    #:cell-at
    #:close-session
+   #:close-session-manager
    #:cursor-position
+   #:detach
    #:feed-terminal
+   #:input-draft
    #:interactive-shell
+   #:lookup-session
    #:make-terminal-emulator
+   #:make-session-manager
    #:pty-master
    #:read-output
    #:read-output-bytes
+   #:read-attachment
    #:render-terminal
    #:resize-terminal
    #:resize-session
+   #:retained-screen
+   #:restore-session
+   #:reattach-session
    #:run-emulated
    #:run-passthrough
    #:screen-cell-character
@@ -151,9 +249,16 @@
    #:screen-lines
    #:set-status-line
    #:session-eof-p
+   #:session-running-p
+   #:session-error
+   #:session-id
    #:session-open-p
    #:shell-session
+   #:set-input-draft
+   #:start-session
    #:start-shell
+   #:submit-input
+   #:terminate-session
    #:terminal-emulator
    #:terminal-size
    #:wait-for-session

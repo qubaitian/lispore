@@ -59,6 +59,27 @@ It handles common ANSI cursor, erase, and style sequences.
 
 Frontend modes restore terminal settings after normal exit and errors.
 
+## Managed sessions
+
+`make-session-manager` creates an in-process session registry.
+`start-session` creates a fixed-size shell and returns an opaque ID.
+`attach-session` creates a frontend attachment for a running session.
+Set `:mode :passthrough` when using the passthrough frontend.
+`restore-session` reattaches and returns the retained terminal screen.
+`reattach-session` provides the same operation with domain terminology.
+`detach` removes one attachment without closing the shell session.
+`read-attachment` reads output broadcast to that attachment.
+`set-input-draft` stores input privately for one attachment.
+`submit-input` submits one draft without interleaving concurrent input.
+`terminate-session` ends a managed session and prevents restoration.
+`session-error` returns a background reader error after termination.
+`close-session-manager` terminates its sessions during application cleanup.
+
+The session manager retains final screens for a fixed time.
+Existing attachments keep their final screen after termination.
+Natural shell exit rejects every new attachment.
+Service restart does not preserve in-memory sessions.
+
 ## Scope
 
-The MVP excludes panes, detaching, reattachment, scrollback, mouse input, and windows.
+The MVP excludes panes, scrollback, mouse input, and windows.

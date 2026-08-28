@@ -11,6 +11,316 @@
   (unless condition
     (error (apply #'format nil format-control format-arguments))))
 
+(defun screen-has-text-p (terminal text)
+  (some (lambda (line) (search text line))
+        (screen-lines terminal)))
+
+(defun wait-until (predicate &key (attempts 100) (delay 0.05))
+  (loop repeat attempts
+        when (funcall predicate)
+          do (return t)
+        do (sleep delay)
+        finally (return (funcall predicate))))
+
+(defun attachment-output-has-text-p (attachment text)
+  (let ((output ""))
+    (loop repeat 100
+          do (multiple-value-bind (bytes eof-p)
+                 (read-attachment attachment :wait-p nil)
+               (when (and bytes (plusp (length bytes)))
+                 (setf output
+                       (concatenate 'string
+                                    output
+                                    (map 'string #'code-char bytes)))
+                 (when (search text output)
+                   (return-from attachment-output-has-text-p t)))
+               (when eof-p
+                 (return nil))
+               (sleep 0.01)))
+    nil))
+
+(defun drain-attachment (attachment)
+  "Remove all currently buffered output from ATTACHMENT."
+  (loop
+    for bytes = (read-attachment attachment :wait-p nil)
+    while (and bytes (plusp (length bytes)))))
+
+(deftest detached-session-restores-retained-screen ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :width 20
+                                          :height 4))
+               (session (lookup-session manager session-id)))
+          (multiple-value-bind (attachment screen)
+              (restore-session manager session-id)
+            (check attachment
+                   "The session does not accept its first attachment.")
+            (check (not (screen-has-text-p screen "detach-marker"))
+                   "The first attachment returns stale screen data.")
+            (set-input-draft attachment
+                             (format nil "printf 'detach-marker\\n'; sleep 1~%"))
+            (check (submit-input attachment)
+                   "The first input submission is rejected.")
+            (check (wait-until
+                    (lambda ()
+                      (screen-has-text-p (attachment-screen attachment)
+                                         "detach-marker")))
+                   "The session does not retain shell output.")
+            (check (detach attachment)
+                   "The frontend cannot detach from the session.")
+            (check (session-running-p session)
+                   "Detachment terminates the shell session.")
+            (multiple-value-bind (restored screen)
+                (restore-session manager session-id)
+              (check restored
+                     "The running session cannot be restored.")
+              (check (screen-has-text-p screen "detach-marker")
+                     "Restoration loses the retained screen.")
+              (set-input-draft restored
+                               (format nil "printf 'restore-marker\\n'; exit~%"))
+              (check (submit-input restored)
+                     "The restored frontend cannot submit input.")
+              (check (wait-until
+                      (lambda ()
+                        (not (session-running-p session))))
+                     "The restored shell session does not terminate.")
+              (check (not (attachment-attached-p restored))
+                     "Session termination leaves the attachment connected.")
+              (check (null (restore-session manager session-id))
+                     "The terminated session accepts a new attachment.")
+              (check (screen-has-text-p (attachment-screen restored)
+                                        "restore-marker")
+                     "The attached frontend loses the final screen."))))
+      (close-session-manager manager))))
+
+(deftest managed-session-broadcasts-output-to-every-attachment ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let ((session-id (start-session manager
+                                         :shell "/bin/sh"
+                                         :width 20
+                                         :height 4)))
+          (let ((first (attach-session manager session-id))
+                (second (attach-session manager session-id)))
+            (check (and first second)
+                   "The session does not accept two attachments.")
+            (set-input-draft first
+                             (format nil "printf 'broadcast-marker\\n'; sleep 1~%"))
+            (check (submit-input first)
+                   "The attached frontend cannot submit input.")
+            (check (and (attachment-output-has-text-p first
+                                                      "broadcast-marker")
+                        (attachment-output-has-text-p second
+                                                      "broadcast-marker"))
+                   "The session does not broadcast output to every attachment.")
+            (check (and (attachment-attached-p first)
+                        (attachment-attached-p second))
+                   "A healthy attachment disconnects unexpectedly.")))
+      (close-session-manager manager))))
+
+(deftest attachments-keep-private-input-drafts ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (first (attach-session manager session-id))
+               (second (attach-session manager session-id)))
+          (set-input-draft first "printf 'draft-marker\\n'")
+          (set-input-draft second "printf 'other-draft\\n'")
+          (check (and (string= "printf 'draft-marker\\n'"
+                               (input-draft first))
+                      (string= "printf 'other-draft\\n'"
+                               (input-draft second)))
+                 "Attachments do not keep private input drafts.")
+          (check (submit-input first)
+                 "The draft submission is rejected.")
+          (check (string= "" (input-draft first))
+                 "A submitted draft remains in the input box.")
+          (check (string= "printf 'other-draft\\n'"
+                          (input-draft second))
+                 "One attachment changes another draft.")
+          (check (detach second)
+                 "The second attachment cannot detach.")
+          (check (not (submit-input second))
+                 "A detached frontend submits input.")
+          (check (string= "printf 'other-draft\\n'"
+                          (input-draft second))
+                 "A rejected draft does not stay in its input box."))
+      (close-session-manager manager))))
+
+(deftest slow-attachment-disconnects-after-buffer-overflow ()
+  (let ((manager (make-session-manager
+                  :retention-seconds 5
+                  :max-buffer-bytes 8192)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (slow (attach-session manager session-id))
+               (healthy (attach-session manager session-id)))
+          (set-input-draft healthy
+                           (format nil
+                                   "i=0; while [ $i -lt 100 ]; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; i=$((i+1)); done; sleep 1~%"))
+          (check (submit-input healthy)
+                 "The overflow test input is rejected.")
+          (check (wait-until
+                  (lambda ()
+                    (read-attachment healthy :wait-p nil)
+                    (not (attachment-attached-p slow)))
+                  :attempts 300
+                  :delay 0.01)
+                 "A slow attachment survives buffer overflow.")
+          (check (attachment-attached-p healthy)
+                 "A healthy attachment disconnects with the slow one."))
+      (close-session-manager manager))))
+
+(deftest blocked-attachment-reader-wakes-after-buffer-overflow ()
+  (let ((manager (make-session-manager
+                  :retention-seconds 5
+                  :max-buffer-bytes 32)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (slow (attach-session manager session-id))
+               (writer (attach-session manager session-id))
+               (result nil)
+               (reader nil)
+               (ready-lock (make-lock "reader readiness"))
+               (ready-condition (make-condition-variable :name "reader readiness"))
+               (ready-p nil))
+          (drain-attachment slow)
+          (setf reader
+                (make-thread
+                 (lambda ()
+                   (with-lock-held (ready-lock)
+                     (setf ready-p t)
+                     (condition-notify ready-condition))
+                   (loop
+                     (multiple-value-bind (bytes eof-p)
+                         (read-attachment slow)
+                       (declare (ignore bytes))
+                       (when eof-p
+                         (setf result (list nil t))
+                         (return)))))))
+          (with-lock-held (ready-lock)
+            (loop until ready-p
+                  do (condition-wait ready-condition ready-lock)))
+          (set-input-draft writer
+                           (format nil "printf 'overflow-overflow-overflow-overflow'; sleep 1~%"))
+          (check (submit-input writer)
+                 "The overflow wakeup input is rejected.")
+          (check (wait-until (lambda () (not (attachment-attached-p slow))))
+                 "Buffer overflow does not disconnect the slow attachment.")
+          (join-thread reader)
+          (check (and result (null (first result)) (second result))
+                 "A blocked reader does not wake after disconnection."))
+      (close-session-manager manager))))
+
+(deftest terminated-session-retains-screen-for-a-fixed-time ()
+  (let ((manager (make-session-manager :retention-seconds 0.2)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager session-id)))
+          (set-input-draft attachment
+                           (format nil "printf 'final-marker\\n'; exit~%"))
+          (check (submit-input attachment)
+                 "The final-screen input is rejected.")
+          (check (wait-until (lambda () (not (session-running-p session))))
+                 "The session does not terminate naturally.")
+          (check (lookup-session manager session-id)
+                 "The manager drops the retained session too early.")
+          (check (screen-has-text-p (retained-screen session) "final-marker")
+                 "The retained screen loses final output.")
+                 (check (wait-until (lambda () (null (lookup-session manager session-id)))
+                             :attempts 100
+                             :delay 0.01)
+                 "The manager keeps final screen data beyond its retention time.")
+          (check (null (attachment-screen attachment))
+                 "An attachment keeps final screen data beyond retention."))
+      (close-session-manager manager))))
+
+(deftest explicit-termination-stops-managed-session ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager session-id)))
+          (check (terminate-session manager session-id)
+                 "Explicit termination does not return success.")
+          (check (not (session-running-p session))
+                 "Explicit termination leaves the session running.")
+          (check (not (attachment-attached-p attachment))
+                 "Explicit termination leaves the attachment connected.")
+          (check (null (restore-session manager session-id))
+                 "Explicit termination allows restoration."))
+      (close-session-manager manager))))
+
+(deftest emulated-frontend-can-run-from-an-attachment ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager session-id))
+               (result nil)
+               (thread
+                 (make-thread
+                  (lambda ()
+                    (multiple-value-bind (status terminal)
+                        (run-emulated :attachment attachment
+                                      :input-fd nil
+                                      :output-fd nil)
+                      (setf result (list status terminal)))))))
+          (sleep 0.05)
+          (set-input-draft attachment
+                           (format nil "printf 'frontend-marker\\n'; sleep 1~%"))
+          (check (submit-input attachment)
+                 "The attached frontend cannot submit input.")
+          (check (wait-until
+                  (lambda ()
+                    (screen-has-text-p (attachment-screen attachment)
+                                       "frontend-marker")))
+                 "The attached frontend does not receive output.")
+          (check (detach attachment)
+                 "The attached frontend cannot detach.")
+          (join-thread thread)
+          (check (and result
+                      (screen-has-text-p (second result) "frontend-marker"))
+                 "The frontend does not retain its final screen after detach.")
+          (check (session-running-p session)
+                 "Frontend detachment terminates the shell session."))
+      (close-session-manager manager))))
+
+(deftest passthrough-frontend-can-run-from-an-attachment ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager session-id :mode :passthrough))
+               (finished-p nil)
+               (thread
+                 (make-thread
+                  (lambda ()
+                    (run-passthrough :attachment attachment
+                                     :input-fd nil
+                                     :output-fd nil)
+                    (setf finished-p t)))))
+          (set-input-draft attachment
+                           (format nil "printf 'passthrough-marker\\n'; sleep 1~%"))
+          (check (submit-input attachment)
+                 "The passthrough frontend cannot submit input.")
+          (check (wait-until
+                  (lambda ()
+                    (screen-has-text-p (attachment-screen attachment)
+                                       "passthrough-marker")))
+                 "The passthrough attachment does not receive output.")
+          (check (detach attachment)
+                 "The passthrough frontend cannot detach.")
+          (join-thread thread)
+          (check finished-p
+                 "The passthrough frontend does not stop after detach.")
+          (check (session-running-p session)
+                 "Passthrough detachment terminates the shell session."))
+      (close-session-manager manager))))
+
 (deftest terminal-writes-text ()
   (let ((terminal (make-terminal-emulator :width 8 :height 2)))
     (feed-terminal terminal "hello")

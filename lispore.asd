@@ -1,13 +1,14 @@
 (asdf:defsystem "lispore"
   :description "Lispore provides a small Common Lisp terminal tool."
   :version "0.1.0"
-  :depends-on ("cffi")
+  :depends-on ("bordeaux-threads" "cffi")
   :serial t
   :components ((:file "src/package")
                (:file "src/utf8")
                (:file "src/platform")
                (:file "src/pty")
                (:file "src/terminal")
+               (:file "src/session")
                (:file "src/frontend"))
   :in-order-to ((test-op (test-op "lispore/tests"))))
 
