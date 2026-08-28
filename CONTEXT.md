@@ -25,11 +25,43 @@ _Avoid_: shell terminal
 The endpoint that the shell uses as its controlling terminal.
 _Avoid_: child pipe
 
+**Session termination**:
+The end of a shell session after natural exit or explicit termination.
+_Avoid_: detachment
+
 ## Display
 
 **Terminal frontend**:
 A component that connects a shell session to a terminal display.
 _Avoid_: shell session
+
+**Frontend input**:
+Input held by one terminal frontend before submission to a shell session.
+_Avoid_: shared input
+
+**Input submission**:
+Input sent by a terminal frontend to a shell session.
+_Avoid_: shared input
+
+**Shared output**:
+Output from a shell session that every attached terminal frontend can observe.
+_Avoid_: frontend-local output
+
+**Attachment**:
+A connection between a terminal frontend and a shell session.
+_Avoid_: terminal session
+
+**Detachment**:
+The state where a terminal frontend disconnects while the shell session continues.
+_Avoid_: session close, termination
+
+**Reattachment**:
+A new attachment to an existing running shell session.
+_Avoid_: session restart
+
+**Retained display**:
+Screen contents that remain available after detachment or session termination.
+_Avoid_: cleared screen
 
 **Passthrough mode**:
 A frontend that forwards terminal input and output without interpretation.
