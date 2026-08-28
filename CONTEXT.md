@@ -47,6 +47,10 @@ _Avoid_: passthrough mode
 A rectangular display made of character cells and text styles.
 _Avoid_: terminal buffer
 
+**Status line**:
+A fixed bottom row that shows shell session information.
+_Avoid_: status bar
+
 **Terminal size**:
 The screen width and height measured in character cells.
 _Avoid_: pixel size

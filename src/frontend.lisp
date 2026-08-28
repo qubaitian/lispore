@@ -2,6 +2,59 @@
 
 (defconstant +default-width+ 80)
 (defconstant +default-height+ 24)
+(defconstant +frontend-poll-timeout+ 100)
+(defparameter +status-line-text+ " lispore | shell ")
+
+(defun frontend-content-height (height)
+  "Return the rows available to the shell below the status line."
+  (max 1 (1- height)))
+
+(defun status-line-text-for-width (width)
+  "Pad or clip the status line to WIDTH columns."
+  (if (>= width (length +status-line-text+))
+      (concatenate 'string
+                   +status-line-text+
+                   (make-string (- width (length +status-line-text+))
+                                :initial-element #\Space))
+      (subseq +status-line-text+ 0 width)))
+
+(defun render-passthrough-status-line (width height)
+  "Return ANSI output that draws the fixed passthrough status line."
+  (format nil
+          "~C7~C[1;~Dr~C[~D;1H~C[2K~C[30;42m~A~C[0m~C8"
+          #\Escape
+          #\Escape
+          (frontend-content-height height)
+          #\Escape
+          height
+          #\Escape
+          #\Escape
+          (status-line-text-for-width width)
+          #\Escape
+          #\Escape))
+
+(defun render-passthrough-status-line-clear (height)
+  "Return ANSI output that clears the passthrough status line."
+  (format nil
+          "~C7~C[1;~Dr~C[~D;1H~C[2K~C[0m~C8"
+          #\Escape
+          #\Escape
+          height
+          #\Escape
+          height
+          #\Escape
+          #\Escape
+          #\Escape))
+
+(defun write-passthrough-status-line (output-fd width height)
+  (when output-fd
+    (write-fd output-fd
+              (encode-utf8 (render-passthrough-status-line width height)))))
+
+(defun clear-passthrough-status-line (output-fd height)
+  (when output-fd
+    (write-fd output-fd
+              (encode-utf8 (render-passthrough-status-line-clear height)))))
 
 (defun event-for-fd (events fd)
   (cdr (assoc fd events)))
@@ -50,15 +103,19 @@
       (call-with-raw-terminal function :fd input-fd)
       (funcall function)))
 
-(defun run-frontend-loop (session input-fd output-handler)
+(defun run-frontend-loop (session input-fd output-handler &key cycle-handler)
   "Run frontend events until SESSION reaches end of file."
   (let ((input-open-p (not (null input-fd))))
     (loop
       with session-eof-p = nil
       until session-eof-p
-      for events = (poll-fds (session-descriptors
-                              session
-                              (and input-open-p input-fd)))
+      for events = (progn
+                     (when cycle-handler
+                       (funcall cycle-handler))
+                     (poll-fds (session-descriptors
+                                session
+                                (and input-open-p input-fd))
+                               :timeout +frontend-poll-timeout+))
       do (when (event-readable-p events (pty-master session))
            (setf session-eof-p (funcall output-handler)))
          (when (and input-open-p
@@ -70,12 +127,15 @@
 (defun run-passthrough (&key (session nil) (input-fd 0) (output-fd 1))
   "Run a passthrough frontend until SESSION exits."
   (let ((owned-session-p (null session))
-        (session (or session (start-shell))))
+        (session (or session (start-shell)))
+        (width nil)
+        (height nil))
     (unwind-protect
         (progn
-          (multiple-value-bind (width height)
-              (terminal-dimensions input-fd)
-            (resize-session session width height))
+          (multiple-value-setq (width height)
+            (terminal-dimensions input-fd))
+          (resize-session session width (frontend-content-height height))
+          (write-passthrough-status-line output-fd width height)
           (call-with-input-mode
            input-fd
            (lambda ()
@@ -83,8 +143,29 @@
               session
               input-fd
               (lambda ()
-                (drain-passthrough-output session output-fd)))))
+                (let ((eof-p (drain-passthrough-output session output-fd)))
+                  (unless eof-p
+                    (write-passthrough-status-line output-fd width height))
+                  eof-p))
+              :cycle-handler
+              (lambda ()
+                (when input-fd
+                  (multiple-value-bind (new-width new-height)
+                      (terminal-dimensions input-fd)
+                    (unless (and (= new-width width)
+                                 (= new-height height))
+                      (setf width new-width
+                            height new-height)
+                      (resize-session session
+                                      width
+                                      (frontend-content-height height))
+                      (write-passthrough-status-line
+                       output-fd
+                       width
+                       height))))))))
           (wait-for-session session))
+      (when height
+        (clear-passthrough-status-line output-fd height))
       (when owned-session-p
         (close-session session)))))
 
@@ -113,12 +194,15 @@
          (terminal (or terminal
                        (multiple-value-bind (width height)
                            (terminal-dimensions input-fd)
-                         (make-terminal-emulator :width width :height height)))))
+                         (make-terminal-emulator :width width :height height))))
+         (width nil)
+         (height nil))
     (unwind-protect
         (progn
-          (multiple-value-bind (width height)
-              (lispore.terminal:terminal-size terminal)
-            (resize-session session width height))
+          (set-status-line terminal +status-line-text+)
+          (multiple-value-setq (width height)
+            (lispore.terminal:terminal-size terminal))
+          (resize-session session width (frontend-content-height height))
           (write-terminal terminal output-fd)
           (call-with-input-mode
            input-fd
@@ -131,7 +215,22 @@
                     (drain-emulated-output session terminal)
                   (when changed-p
                     (write-terminal terminal output-fd))
-                  eof-p)))))
+                  eof-p))
+              :cycle-handler
+              (lambda ()
+                (when input-fd
+                  (multiple-value-bind (new-width new-height)
+                      (terminal-dimensions input-fd)
+                    (unless (and (= new-width width)
+                                 (= new-height height))
+                      (setf width new-width
+                            height new-height)
+                      (resize-terminal terminal width height)
+                      (resize-session
+                       session
+                       width
+                       (frontend-content-height height))
+                      (write-terminal terminal output-fd))))))))
           (values (wait-for-session session) terminal))
       (when owned-session-p
         (close-session session)))))

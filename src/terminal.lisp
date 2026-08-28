@@ -10,13 +10,20 @@
 (defclass terminal-emulator ()
   ((width
     :initarg :width
-    :reader terminal-width)
+    :accessor terminal-width)
    (height
     :initarg :height
-    :reader terminal-height)
+    :accessor terminal-height)
+   ;; The bottom status line stays outside the shell content area.
+   (content-height
+    :initarg :content-height
+    :accessor terminal-content-height)
    (cells
     :initarg :cells
     :accessor terminal-cells)
+   (status-line
+    :initform nil
+    :accessor terminal-status-line)
    (cursor-row
     :initform 0
     :accessor cursor-row)
@@ -57,19 +64,83 @@
               (loop repeat height
                     collect (make-blank-row width))))
 
-(defun make-terminal-emulator (&key (width 80) (height 24))
+(defun make-terminal-emulator (&key (width 80)
+                                    (height 24)
+                                    (content-height height))
   "Create a terminal emulator with WIDTH columns and HEIGHT rows."
   (check-type width (integer 1))
   (check-type height (integer 1))
+  (check-type content-height (integer 1))
+  (unless (<= content-height height)
+    (error "The content height cannot exceed the terminal height."))
   (make-instance 'terminal-emulator
                  :width width
                  :height height
+                 :content-height content-height
                  :cells (make-blank-screen width height)))
 
 (defun terminal-size (terminal)
   "Return the emulator size as width and height values."
   (values (terminal-width terminal)
           (terminal-height terminal)))
+
+(defun draw-status-line (terminal)
+  "Draw TERMINAL's status line in its reserved bottom row."
+  (let* ((row (aref (terminal-cells terminal)
+                    (1- (terminal-height terminal))))
+         (text (terminal-status-line terminal))
+         (width (terminal-width terminal)))
+    (loop for column below width
+          for character = (if (and text (< column (length text)))
+                              (char text column)
+                              #\Space)
+          do (setf (screen-cell-character (aref row column)) character
+                   ;; ANSI 30 is black foreground. ANSI 42 is green background.
+                   (screen-cell-style (aref row column)) (list 30 42)))))
+
+(defun set-status-line (terminal text)
+  "Reserve TERMINAL's bottom row and display TEXT there."
+  (check-type text string)
+  (setf (terminal-status-line terminal) text
+        (terminal-content-height terminal)
+        (max 1 (1- (terminal-height terminal))))
+  (draw-status-line terminal)
+  (setf (cursor-row terminal)
+        (min (cursor-row terminal) (1- (terminal-content-height terminal))))
+  terminal)
+
+(defun resize-terminal (terminal width height)
+  "Resize TERMINAL and preserve its visible content where possible."
+  (check-type width (integer 1))
+  (check-type height (integer 1))
+  (let* ((old-width (terminal-width terminal))
+         (old-content-height (terminal-content-height terminal))
+         (content-height (if (terminal-status-line terminal)
+                             (max 1 (1- height))
+                             height))
+         (old-cells (terminal-cells terminal))
+         (cells (make-blank-screen width height)))
+    (loop for row below (min old-content-height content-height)
+          for old-row = (aref old-cells row)
+          for new-row = (aref cells row)
+          do (loop for column below (min old-width width)
+                   do (setf (aref new-row column)
+                            (copy-screen-cell (aref old-row column)))))
+    (setf (terminal-width terminal) width
+          (terminal-height terminal) height
+          (terminal-content-height terminal) content-height
+          (terminal-cells terminal) cells
+          (cursor-row terminal)
+          (min (cursor-row terminal) (1- content-height))
+          (cursor-column terminal)
+          (min (cursor-column terminal) width)
+          (saved-row terminal)
+          (min (saved-row terminal) (1- content-height))
+          (saved-column terminal)
+          (min (saved-column terminal) width))
+    (when (terminal-status-line terminal)
+      (draw-status-line terminal)))
+  terminal)
 
 (defun cell-at (terminal row column)
   "Return a copy of the cell at one-based ROW and COLUMN."
@@ -99,27 +170,31 @@
   (max minimum (min value maximum)))
 
 (defun reset-terminal (terminal)
-  (setf (terminal-cells terminal)
-        (make-blank-screen (terminal-width terminal)
-                           (terminal-height terminal))
-        (cursor-row terminal) 0
-        (cursor-column terminal) 0
-        (current-style terminal) nil
-        (parser-state terminal) :ground
-        (csi-buffer terminal) ""
-        (osc-escape-p terminal) nil)
+  (let ((status-line (terminal-status-line terminal)))
+    (setf (terminal-cells terminal)
+          (make-blank-screen (terminal-width terminal)
+                             (terminal-height terminal))
+          (cursor-row terminal) 0
+          (cursor-column terminal) 0
+          (current-style terminal) nil
+          (parser-state terminal) :ground
+          (csi-buffer terminal) ""
+          (osc-escape-p terminal) nil)
+    ;; Shell reset sequences must not remove the frontend status line.
+    (when status-line
+      (draw-status-line terminal)))
   terminal)
 
 (defun scroll-up (terminal)
   (let ((cells (terminal-cells terminal))
-        (height (terminal-height terminal)))
+        (height (terminal-content-height terminal)))
     (loop for row below (1- height)
           do (setf (aref cells row) (aref cells (1+ row))))
     (setf (aref cells (1- height))
           (make-blank-row (terminal-width terminal)))))
 
 (defun line-feed (terminal)
-  (if (= (cursor-row terminal) (1- (terminal-height terminal)))
+  (if (= (cursor-row terminal) (1- (terminal-content-height terminal)))
       (scroll-up terminal)
       (incf (cursor-row terminal))))
 
@@ -135,7 +210,7 @@
 
 (defun move-cursor (terminal row column)
   (setf (cursor-row terminal)
-        (clamp row 0 (1- (terminal-height terminal)))
+        (clamp row 0 (1- (terminal-content-height terminal)))
         (cursor-column terminal)
         (clamp column 0 (terminal-width terminal))))
 
@@ -157,7 +232,7 @@
 (defun erase-display (terminal mode)
   (let ((row (cursor-row terminal))
         (column (cursor-column terminal))
-        (height (terminal-height terminal))
+        (height (terminal-content-height terminal))
         (width (terminal-width terminal)))
     (cond
       ((= mode 2)

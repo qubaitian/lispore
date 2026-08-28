@@ -56,9 +56,11 @@
    #:feed-terminal
    #:make-terminal-emulator
    #:render-terminal
+   #:resize-terminal
    #:screen-cell-character
    #:screen-cell-style
    #:screen-lines
+   #:set-status-line
    #:terminal-emulator
    #:terminal-size
    #:cursor-position))
@@ -88,7 +90,9 @@
   (:import-from #:lispore.terminal
                 #:feed-terminal
                 #:make-terminal-emulator
-                #:render-terminal)
+                #:render-terminal
+                #:resize-terminal
+                #:set-status-line)
   (:import-from #:lispore.utf8
                 #:encode-utf8)
   (:export
@@ -119,9 +123,11 @@
                 #:feed-terminal
                 #:make-terminal-emulator
                 #:render-terminal
+                #:resize-terminal
                 #:screen-cell-character
                 #:screen-cell-style
                 #:screen-lines
+                #:set-status-line
                 #:terminal-emulator
                 #:terminal-size
                 #:cursor-position)
@@ -136,12 +142,14 @@
    #:read-output
    #:read-output-bytes
    #:render-terminal
+   #:resize-terminal
    #:resize-session
    #:run-emulated
    #:run-passthrough
    #:screen-cell-character
    #:screen-cell-style
    #:screen-lines
+   #:set-status-line
    #:session-eof-p
    #:session-open-p
    #:shell-session

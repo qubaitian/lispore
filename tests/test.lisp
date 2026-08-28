@@ -122,6 +122,42 @@
       (check (null (screen-cell-style plain))
              "The terminal does not clear SGR style."))))
 
+(deftest terminal-reserves-a-colored-status-line ()
+  (let ((terminal (make-terminal-emulator :width 20 :height 4)))
+    (set-status-line terminal " lispore | shell ")
+    (feed-terminal terminal (format nil "content~C[4;1Hbottom"
+                                    #\Escape))
+    (let ((status (cell-at terminal 4 1)))
+      (check (string= " lispore | shell    "
+                      (fourth (screen-lines terminal)))
+             "The terminal does not render the status line.")
+      (check (and (member 30 (screen-cell-style status))
+                  (member 42 (screen-cell-style status)))
+             "The status line does not use black text on green."))
+    (check (search "bottom" (third (screen-lines terminal)))
+           "Shell output overwrites the status line.")))
+
+(deftest terminal-preserves-status-line-after-resize-and-reset ()
+  (let ((terminal (make-terminal-emulator :width 20 :height 4)))
+    (set-status-line terminal " lispore | shell ")
+    (resize-terminal terminal 12 3)
+    (feed-terminal terminal (format nil "~Cc" #\Escape))
+    (check (string= " lispore | s" (third (screen-lines terminal)))
+           "The status line does not survive terminal reset.")
+    (check (and (= 12 (length (third (screen-lines terminal))))
+                (some (lambda (line) (search " lispore | " line))
+                      (screen-lines terminal)))
+           "The resized status line has an unexpected width.")))
+
+(deftest passthrough-status-line-uses-fixed-ansi-layout ()
+  (let ((output (lispore.frontend::render-passthrough-status-line 20 4)))
+    (check (search (format nil "~C[1;3r" #\Escape) output)
+           "Passthrough mode does not reserve one row.")
+    (check (search (format nil "~C[30;42m" #\Escape) output)
+           "Passthrough mode does not set status colors.")
+    (check (search " lispore | shell " output)
+           "Passthrough mode does not render status text.")))
+
 (deftest passthrough-frontend-drains-a-session ()
   (let ((session (start-shell :shell "/bin/sh" :width 80 :height 24)))
     (unwind-protect
@@ -149,6 +185,24 @@
             (check (some (lambda (line) (search "emulated-marker" line))
                          (screen-lines result))
                    "The emulated frontend loses shell output.")))
+      (close-session session))))
+
+(deftest emulated-frontend-reserves-status-line-height ()
+  (let ((session (start-shell :shell "/bin/sh" :width 20 :height 4))
+        (terminal (make-terminal-emulator :width 20 :height 4)))
+    (unwind-protect
+        (progn
+          (write-input session (format nil "stty size; exit~%"))
+          (run-emulated :session session
+                        :terminal terminal
+                        :input-fd nil
+                        :output-fd nil)
+          (check (some (lambda (line) (search "3 20" line))
+                       (screen-lines terminal))
+                 "The emulated frontend does not reserve status height.")
+          (check (string= " lispore | shell    "
+                          (first (last (screen-lines terminal))))
+                 "The emulated frontend loses its status line."))
       (close-session session))))
 
 (defun terminal-settings (fd)

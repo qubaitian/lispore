@@ -9,11 +9,13 @@
                 #:run-passthrough
                 #:make-terminal-emulator
                 #:read-output
+                #:resize-terminal
                 #:resize-session
                 #:render-terminal
                 #:screen-lines
                 #:screen-cell-character
                 #:screen-cell-style
+                #:set-status-line
                 #:session-open-p
                 #:start-shell
                 #:write-input)

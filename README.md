@@ -21,6 +21,8 @@ sbcl --noinform --load init --load examples/interactive.lisp
 
 Passthrough mode forwards terminal bytes without interpretation.
 It preserves ANSI control sequences and UTF-8 text.
+Both frontend modes reserve the bottom row for a status line.
+The status line shows ` lispore | shell ` with green and black colors.
 
 This command starts the emulated frontend.
 
