@@ -24,16 +24,19 @@
       (setf *session-manager* (make-session-manager))))
 
 (defun run-new-session (manager)
-  "Create and attach one passthrough session through MANAGER."
+  "Create and attach one command frontend through MANAGER."
   (multiple-value-bind (width height)
       (terminal-dimensions)
-    (let* ((session-id (start-session manager :width width :height height))
+    (let* ((session-id (start-session manager
+                                     :width width
+                                     :height height
+                                     :mode :command))
            (attachment (attach-session manager
                                        session-id
-                                       :mode :passthrough)))
+                                       :mode :command)))
       (unless attachment
         (error "The new shell session cannot accept an attachment."))
-      (interactive-shell :mode :passthrough
+      (interactive-shell :mode :command
                          :attachment attachment))))
 
 (defun application-handler (command)

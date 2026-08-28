@@ -1,5 +1,19 @@
 (defpackage #:lispore.tests
   (:use #:cl)
+  (:import-from #:lispore.input
+                #:input-editor-add-draft-history
+                #:input-editor-cursor
+                #:input-editor-clear
+                #:input-completeness
+                #:input-editor-feed
+                #:input-editor-record-submission
+                #:input-editor-paste
+                #:input-editor-set-history
+                #:input-editor-text
+                #:input-event-text
+                #:input-event-type
+                #:input-language
+                #:make-input-editor)
   (:import-from #:lispore
                 #:attach-session
                 #:attachment-attached-p
@@ -9,8 +23,11 @@
                 #:cell-at
                 #:cursor-position
                 #:detach
+                #:execution-state
                 #:feed-terminal
+                #:interrupt-execution
                 #:input-draft
+                #:input-history
                 #:lookup-session
                 #:make-session-manager
                 #:run-emulated
@@ -22,6 +39,7 @@
                 #:resize-terminal
                 #:resize-session
                 #:render-terminal
+                #:run-command
                 #:screen-lines
                 #:screen-cell-character
                 #:screen-cell-style
@@ -32,6 +50,7 @@
                 #:session-open-p
                 #:start-session
                 #:start-shell
+                #:submit-command
                 #:submit-input
                 #:terminate-session
                 #:write-input)
@@ -42,6 +61,7 @@
                 #:make-condition-variable
                 #:make-lock
                 #:make-thread
+                #:thread-alive-p
                 #:with-lock-held)
   (:import-from #:lispore.utf8
                 #:decode-utf8-chunk
@@ -52,5 +72,6 @@
                 #:+pollin+
                 #:poll-fds
                 #:read-fd
-                #:tty-p)
+                #:tty-p
+                #:write-fd)
   (:export #:run-tests))

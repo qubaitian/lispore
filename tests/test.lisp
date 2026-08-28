@@ -66,7 +66,638 @@
                (when (and bytes (plusp (length bytes)))
                  (write-string (map 'string #'code-char bytes) output))
                (when eof-p
-                 (return))))))
+               (return))))))
+
+(deftest input-editor-inserts-at-the-cursor ()
+  (let ((editor (make-input-editor)))
+    (input-editor-paste editor "abc")
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[D" #\Escape)))
+    (input-editor-feed editor (encode-utf8 "X"))
+    (check (string= "abXc" (input-editor-text editor))
+           "The input editor does not insert at the cursor.")
+    (check (= 3 (input-editor-cursor editor))
+           "The input editor cursor has the wrong position.")))
+
+(deftest input-editor-supports-editing-keys ()
+  (let ((editor (make-input-editor)))
+    (input-editor-paste editor "abcd")
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[H" #\Escape)))
+    (input-editor-feed editor (encode-utf8 "X"))
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[3~~" #\Escape)))
+    (check (string= "Xbcd" (input-editor-text editor))
+           "The input editor does not support Home or Delete.")
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[F" #\Escape)))
+    (input-editor-feed editor (vector #x7f))
+    (check (string= "Xbc" (input-editor-text editor))
+           "The input editor does not support End or Backspace.")))
+
+(deftest input-editor-controls-work-in-escape-sequences ()
+  (let ((editor (make-input-editor)))
+    (input-editor-feed editor (encode-utf8 "draft"))
+    (input-editor-feed editor (vector #xe2))
+    (let ((events (input-editor-feed editor (vector 3))))
+      (check (and (= 1 (length events))
+                  (eq :interrupt (input-event-type (first events))))
+             "Control-C cannot follow an incomplete UTF-8 sequence."))
+    (input-editor-clear editor)
+    (input-editor-feed editor (vector #xe2))
+    (let ((events (input-editor-feed editor (vector 4))))
+      (check (and (= 1 (length events))
+                  (eq :eof (input-event-type (first events))))
+             "Control-D cannot follow an incomplete UTF-8 sequence."))
+    (let ((events
+            (input-editor-feed
+             editor
+             (encode-utf8 (format nil "~C[~C" #\Escape (code-char 3))))))
+      (check (and (= 1 (length events))
+                  (eq :interrupt (input-event-type (first events))))
+             "Control-C does not interrupt an escape sequence.")
+      (input-editor-clear editor)
+      (let ((events
+              (input-editor-feed
+               editor
+               (encode-utf8 (format nil "~C[~C" #\Escape (code-char 4))))))
+        (check (and (= 1 (length events))
+                    (eq :eof (input-event-type (first events))))
+               "Control-D does not close an empty escape sequence.")))))
+
+(deftest input-editor-preserves-utf8-and-paste-newlines ()
+  (let* ((editor (make-input-editor))
+         (bytes (encode-utf8 "界")))
+    (input-editor-feed editor (subseq bytes 0 2))
+    (check (string= "" (input-editor-text editor))
+           "The input editor emits a split UTF-8 character.")
+    (input-editor-feed editor (subseq bytes 2))
+    (check (string= "界" (input-editor-text editor))
+           "The input editor loses a split UTF-8 character.")
+    (input-editor-clear editor)
+    (input-editor-feed
+     editor
+     (encode-utf8 (format nil "~C[200~~one~%two~C[201~~"
+                          #\Escape
+                          #\Escape)))
+    (check (string= (format nil "one~%two") (input-editor-text editor))
+           "The input editor does not preserve multiline paste.")
+    (let ((events (input-editor-feed editor (vector 13))))
+      (check (and (= 1 (length events))
+                  (eq :enter (input-event-type (first events)))
+                  (string= (format nil "one~%two")
+                           (input-event-text (first events))))
+             "The input editor does not emit an Enter event."))))
+
+(deftest input-editor-navigates-recovery-before-input-history ()
+  (let ((editor (make-input-editor)))
+    (input-editor-set-history editor (list "second" "first"))
+    (input-editor-add-draft-history editor "error draft")
+    (input-editor-paste editor "current")
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[A" #\Escape)))
+    (check (string= "error draft" (input-editor-text editor))
+           "The input editor skips the recovery draft.")
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[A" #\Escape)))
+    (check (string= "second" (input-editor-text editor))
+           "The input editor skips input history.")
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[B" #\Escape)))
+    (check (string= "error draft" (input-editor-text editor))
+           "The input editor cannot navigate back to the recovery draft.")
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[B" #\Escape)))
+    (check (string= "current" (input-editor-text editor))
+           "The input editor does not restore the current draft.")
+    (input-editor-feed editor (encode-utf8 "X"))
+    (input-editor-record-submission editor (input-editor-text editor))
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[A" #\Escape)))
+    (input-editor-feed editor
+                       (encode-utf8 (format nil "~C[A" #\Escape)))
+    (check (string= "currentX" (input-editor-text editor))
+           "Editing recalled input does not create a history entry.")))
+
+(deftest command-session-evaluates-persistent-lisp-forms ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command
+                                          :width 40
+                                          :height 6))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command)))
+          (set-input-draft attachment "(defparameter *input-marker* 41)")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :lisp)
+                 "The command frontend rejects a Lisp form.")
+          (set-input-draft attachment "")
+          (check (wait-until (lambda ()
+                               (eq :ready (execution-state session))))
+                 "The Lisp execution does not finish.")
+          (set-input-draft attachment "(1+ *input-marker*)")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :lisp)
+                 "The command frontend rejects its second Lisp form.")
+          (set-input-draft attachment "")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p (attachment-screen attachment)
+                                            "42"))))
+                 "The Lisp package does not persist between forms.")
+          (check (= 2 (length (input-history session)))
+                 "The session does not retain submitted input history."))
+      (close-session-manager manager))))
+
+(deftest command-session-rejects-incompatible-attachments ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let ((command-id (start-session manager
+                                         :shell "/bin/sh"
+                                         :mode :command))
+              (emulated-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :emulated)))
+          (let ((command-error-p nil)
+                (emulated-error-p nil))
+            (handler-case
+                (attach-session manager command-id :mode :emulated)
+              (error () (setf command-error-p t)))
+            (handler-case
+                (attach-session manager emulated-id :mode :command)
+              (error () (setf emulated-error-p t)))
+            (check command-error-p
+                   "A command session accepts an incompatible frontend.")
+            (check emulated-error-p
+                   "An emulated session accepts the command frontend.")))
+      (close-session-manager manager))))
+
+(deftest command-session-rejects-mismatched-language ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command)))
+          (set-input-draft attachment "(+ 1 2)")
+          (check (not (submit-command attachment
+                                       (input-draft attachment)
+                                       :shell))
+                 "The API accepts a Lisp draft as a shell command.")
+          (check (string= "(+ 1 2)" (input-draft attachment))
+                 "A mismatched language changes the frontend input."))
+      (close-session-manager manager))))
+
+(deftest command-session-runs-shell-commands-in-order ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command
+                                          :width 40
+                                          :height 6))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command)))
+          (set-input-draft attachment "printf 'command-marker\\n'")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :shell)
+                 "The command frontend rejects a shell command.")
+          (set-input-draft attachment "")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p (attachment-screen attachment)
+                                            "command-marker"))))
+                 "The shell command does not finish visibly.")
+          (set-input-draft attachment "printf() { :; }; echo function-marker")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :shell)
+                 "The marker test rejects a shell function definition.")
+          (set-input-draft attachment "")
+          (check (wait-until
+                 (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p (attachment-screen attachment)
+                                            "function-marker"))))
+                 "The shell marker ignores a redefined printf.")
+          (set-input-draft attachment "command printf 'line-one\\n'")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :shell)
+                 "The line-ending test rejects its shell command.")
+          (set-input-draft attachment "")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p
+                          (attachment-screen attachment)
+                          "line-one"))))
+                 "The line-ending test command does not finish.")
+          (set-input-draft attachment "command printf line-two")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :shell)
+                 "The adjacent-output test rejects its shell command.")
+          (set-input-draft attachment "")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (let ((lines (screen-lines
+                                       (attachment-screen attachment))))
+                           (let ((line-one-index
+                                   (position-if
+                                    (lambda (line)
+                                      (search "line-one" line))
+                                    lines))
+                                 (line-two-index
+                                   (position-if
+                                    (lambda (line)
+                                      (search "line-two" line))
+                                    lines)))
+                             (and line-one-index
+                                  line-two-index
+                                  (> line-two-index line-one-index)))))))
+                 "The shell marker changes command output line endings."))
+      (close-session-manager manager))))
+
+(deftest command-session-restores-a-shell-error-draft ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command))
+               (input "false"))
+          (set-input-draft attachment input)
+          (check (submit-command attachment input :shell)
+                 "The shell failure test input does not start.")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (string= input (input-draft attachment)))))
+                 "The command frontend does not restore a shell error draft.")
+          (check (string= input (first (input-history session)))
+                 "The failed shell command does not enter input history."))
+      (close-session-manager manager))))
+
+(deftest command-session-ignores-forged-marker-text ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command))
+               (input "printf '__LISPORE_COMMAND_DONE_1__:0\\n'"))
+          (set-input-draft attachment input)
+          (check (submit-command attachment input :shell)
+                 "The forged marker test input does not start.")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p
+                          (attachment-screen attachment)
+                          "__LISPORE_COMMAND_DONE_1__"))))
+                 "Command output can forge the execution marker."))
+      (close-session-manager manager))))
+
+(deftest command-session-restores-a-draft-before-shell-termination ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command))
+               (input "exit 7"))
+          (set-input-draft attachment input)
+          (check (submit-command attachment input :shell)
+                 "The shell termination test input does not start.")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :closed (execution-state session))
+                         (string= input (input-draft attachment)))))
+                 "Shell termination loses the active command draft."))
+      (close-session-manager manager))))
+
+(deftest command-session-stops-worker-after-shell-exit ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command)))
+          (set-input-draft attachment "(sleep 5)")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :lisp)
+                 "The worker shutdown test input does not start.")
+          (check (wait-until
+                  (lambda ()
+                    (eq :running (execution-state session))))
+                 "The worker shutdown test does not start execution.")
+          (write-input (lispore.session::managed-shell-session session)
+                       (format nil "exit~%"))
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :closed (execution-state session))
+                         (not (thread-alive-p
+                               (lispore.session::execution-thread session))))))
+                 "Shell exit leaves the Lisp execution worker alive."))
+      (close-session-manager manager))))
+
+(deftest command-session-rejects-trailing-lisp-text ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command))
+               (input "(+ 1 2) echo ready"))
+          (set-input-draft attachment input)
+          (check (submit-command attachment input :lisp)
+                 "The mixed Lisp input does not start.")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (string= input (input-draft attachment)))))
+                 "The command frontend drops trailing Lisp text.")
+          (check (string= input (first (input-history session)))
+                 "The mixed Lisp input does not enter input history."))
+      (close-session-manager manager))))
+
+(deftest command-session-restores-an-evaluation-error-draft ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command))
+               (input "(error \"expected failure\")"))
+          (set-input-draft attachment input)
+          (check (submit-command attachment input :lisp)
+                 "The command frontend rejects an error form.")
+          (set-input-draft attachment "")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (string= input (input-draft attachment)))))
+                 "The command frontend does not restore the error draft.")
+          (check (string= input (first (input-history session)))
+                 "The failed form does not enter input history."))
+      (close-session-manager manager))))
+
+(deftest command-session-rejects-submission-during-active-execution ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command)))
+          (set-input-draft attachment "(progn (sleep 0.4) 7)")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :lisp)
+                 "The active command does not start.")
+          (check (string= "" (input-draft attachment))
+                 "Accepted input remains in the frontend input.")
+          (set-input-draft attachment "(+ 1 2)")
+          (check (not (submit-command attachment
+                                       (input-draft attachment)
+                                       :lisp))
+                 "The command frontend submits during active execution.")
+          (check (not (submit-input attachment
+                                    (encode-utf8 (format nil "echo raw~%"))))
+                 "Raw input bypasses the command execution queue.")
+          (check (string= "(+ 1 2)" (input-draft attachment))
+                 "Rejected input changes the frontend input.")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p (attachment-screen attachment)
+                                            "7"))))
+                 "The active command does not finish."))
+      (close-session-manager manager))))
+
+(deftest command-session-interrupts-lisp-execution ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (session (lookup-session manager session-id))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command)))
+          (set-input-draft attachment "(loop (sleep 1))")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :lisp)
+                 "The interrupt test input does not start.")
+          (check (wait-until
+                  (lambda () (eq :running (execution-state session))))
+                 "The interrupt test does not enter active execution.")
+          (check (interrupt-execution attachment)
+                 "The command frontend does not accept an interrupt.")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p
+                          (attachment-screen attachment)
+                          "Execution interrupted"))))
+                 "The Lisp execution does not stop after Ctrl-C.")
+          (set-input-draft attachment "(+ 4 5)")
+          (check (submit-command attachment
+                                 (input-draft attachment)
+                                 :lisp)
+                 "The worker does not accept input after an interrupt.")
+          (check (wait-until
+                  (lambda ()
+                    (and (eq :ready (execution-state session))
+                         (screen-has-text-p (attachment-screen attachment)
+                                            "9"))))
+                 "The worker does not continue after an interrupt."))
+      (close-session-manager manager))))
+
+(deftest command-input-selects-language-and-completeness ()
+  (check (eq :lisp (input-language "(+ 1 2)"))
+         "The command frontend misclassifies a Lisp form.")
+  (check (eq :complete
+             (input-completeness "(+ 1 2)"))
+         "The command frontend rejects a complete Lisp form.")
+  (check (eq :incomplete
+             (input-completeness "(+ 1 2"))
+         "The command frontend accepts an incomplete Lisp form.")
+  (check (eq :complete
+             (input-completeness "(+ 1 2) echo ready"))
+         "The command frontend rejects a mixed shell command.")
+  (check (eq :complete
+             (input-completeness "echo if"))
+         "The command frontend misreads a shell argument as syntax.")
+  (check (eq :complete
+             (input-completeness "echo [ if ]"))
+         "The command frontend misreads test arguments as syntax.")
+  (check (eq :incomplete
+             (input-completeness "printf 'unfinished"))
+         "The command frontend accepts an unfinished shell quote.")
+  (check (eq :incomplete
+             (input-completeness "echo | "))
+         "The command frontend accepts a trailing pipe.")
+  (check (eq :incomplete
+             (input-completeness "if true; then"))
+         "The command frontend accepts an unfinished shell compound.")
+  (check (eq :incomplete
+             (input-completeness "cat <<EOF"))
+         "The command frontend accepts an unfinished here-document.")
+  (check (eq :complete
+             (input-completeness (format nil "cat <<EOF~%if~%EOF")))
+         "The command frontend parses here-document bodies as data.")
+  (check (eq :complete
+             (input-completeness
+              "if true; then echo ready; fi"))
+         "The command frontend rejects a complete shell compound."))
+
+(deftest command-frontend-adds-newlines-to-incomplete-input ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command)))
+          (set-input-draft attachment "if true; then")
+          (check (not (submit-command attachment
+                                       (input-draft attachment)
+                                       :shell))
+                 "The command session accepts incomplete input.")
+          (check (not (lispore.frontend::handle-command-input
+                       attachment
+                       (encode-utf8 (string #\Return))))
+                 "Incomplete input closes the command frontend.")
+          (check (string= (format nil "if true; then~%")
+                          (input-draft attachment))
+                 "Enter submits incomplete input instead of adding a newline.")
+          (check (not (lispore.frontend::handle-command-input
+                       attachment
+                       (vector 4)))
+                 "Ctrl-D closes with a non-empty draft.")
+          (check (string= (format nil "if true; then~%")
+                          (input-draft attachment))
+                 "Ctrl-D changes a non-empty draft.")
+          (set-input-draft attachment "if true; then")
+          (lispore.frontend::handle-command-input
+           attachment
+           (encode-utf8 (format nil "~C[D~C" #\Escape #\Return)))
+          (check (string= (format nil "if true; the~%n")
+                          (input-draft attachment))
+                 "Enter does not insert inside an incomplete draft."))
+      (close-session-manager manager))))
+
+(deftest command-frontend-renders-editor-frame ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :command
+                                          :width 20
+                                          :height 6))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :command))
+               (text (format nil "abc~%def"))
+               (frame nil))
+          (set-input-draft attachment text)
+          (setf frame (lispore.frontend::render-command-frame attachment))
+          (check (equal (list "abc" "def")
+                        (lispore.frontend::input-lines text 20))
+                 "The command frontend wraps input into wrong rows.")
+          (multiple-value-bind (row column)
+              (lispore.frontend::input-cursor-row-column text 7 20)
+            (check (and (= 1 row) (= 3 column))
+                   "The command frontend calculates the wrong cursor."))
+          (check (search "session-1" frame)
+                 "The command frontend omits the session status.")
+          (check (search "abc" frame)
+                 "The command frontend omits the first input row.")
+          (check (search "def" frame)
+                 "The command frontend omits the second input row.")
+          (check (search (format nil "~C[2J" #\Escape) frame)
+                 "The command frontend does not clear the old frame."))
+      (close-session-manager manager))))
+
+(deftest command-frontend-edits-and-submits-input ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (multiple-value-bind (read-pipe write-pipe)
+        (make-test-pipe)
+      (unwind-protect
+          (let* ((session-id (start-session manager
+                                            :shell "/bin/sh"
+                                            :mode :command
+                                            :width 40
+                                            :height 6))
+                 (session (lookup-session manager session-id))
+                 (attachment (attach-session manager
+                                              session-id
+                                              :mode :command))
+                 (finished-p nil)
+                 (thread
+                   (make-thread
+                    (lambda ()
+                      (run-command :attachment attachment
+                                   :input-fd read-pipe
+                                   :output-fd nil)
+                      (setf finished-p t)))))
+            (write-fd write-pipe
+                      (encode-utf8 (format nil "(+ 2 3)~C~C"
+                                           #\Return
+                                           (code-char 4))))
+            (check (wait-until
+                    (lambda ()
+                      (and (eq :ready (execution-state session))
+                           (screen-has-text-p
+                            (attachment-screen attachment)
+                            "5"))))
+                   "The command frontend does not submit edited input.")
+            (join-thread thread)
+            (close-pty write-pipe)
+            (check finished-p
+                   "The command frontend does not stop at input EOF."))
+        (close-pty read-pipe)
+        (ignore-errors (close-pty write-pipe))
+        (close-session-manager manager)))))
 
 (deftest detached-session-restores-retained-screen ()
   (let ((manager (make-session-manager :retention-seconds 5)))
@@ -159,7 +790,7 @@
           (check (submit-input first)
                  "The draft submission is rejected.")
           (check (string= "" (input-draft first))
-                 "A submitted draft remains in the input box.")
+                 "A submitted draft remains in the frontend input.")
           (check (string= "printf 'other-draft\\n'"
                           (input-draft second))
                  "One attachment changes another draft.")
@@ -169,7 +800,7 @@
                  "A detached frontend submits input.")
           (check (string= "printf 'other-draft\\n'"
                           (input-draft second))
-                 "A rejected draft does not stay in its input box."))
+                 "A rejected draft does not stay in the frontend input."))
       (close-session-manager manager))))
 
 (deftest slow-attachment-disconnects-after-buffer-overflow ()

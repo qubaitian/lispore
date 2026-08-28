@@ -138,6 +138,223 @@
     (error "The attachment mode does not match the frontend mode."))
   attachment)
 
+(defun input-lines (text width)
+  "Return TEXT wrapped into WIDTH-column lines."
+  (let ((lines nil)
+        (line nil)
+        (column 0))
+    (labels ((finish-line ()
+               (push (coerce (nreverse line) 'string) lines)
+               (setf line nil
+                     column 0)))
+      (loop for character across text
+            do (if (char= character #\Newline)
+                   (finish-line)
+                   (progn
+                     (when (= column width)
+                       (finish-line))
+                     (push character line)
+                     (incf column))))
+      (let ((full-line-at-end-p (= column width))
+            (ends-with-newline-p (and (plusp (length text))
+                                      (char= (char text (1- (length text)))
+                                             #\Newline))))
+        (finish-line)
+        (when (and full-line-at-end-p
+                   (not ends-with-newline-p))
+          (push "" lines)))
+      (nreverse lines))))
+
+(defun input-cursor-row-column (text cursor width)
+  "Return the wrapped row and column for CURSOR in TEXT."
+  (let ((row 0)
+        (column 0))
+    (loop for index below cursor
+          for character = (char text index)
+          do (if (char= character #\Newline)
+                 (setf row (1+ row)
+                       column 0)
+                 (progn
+                   (when (= column width)
+                     (setf row (1+ row)
+                           column 0))
+                   (incf column))))
+    (when (= column width)
+      (setf row (1+ row)
+            column 0))
+    (values row column)))
+
+(defun fit-text-to-width (text width)
+  "Pad or clip TEXT to WIDTH columns."
+  (if (>= width (length text))
+      (concatenate 'string text
+                   (make-string (- width (length text))
+                                :initial-element #\Space))
+      (subseq text 0 width)))
+
+(defun command-status-line (attachment width)
+  "Return the command status line for ATTACHMENT."
+  (fit-text-to-width
+   (format nil " lispore | ~A | ~A "
+           (session-id (attachment-session attachment))
+           (string-downcase (symbol-name (execution-state attachment))))
+   width))
+
+(defun input-line-offset (cursor-row line-count total-lines)
+  "Return a scroll offset that keeps the input cursor visible."
+  (min (max 0 (- total-lines line-count))
+       (max 0 (- cursor-row (1- line-count)))))
+
+(defun render-command-frame (attachment)
+  "Render shared output, the input area, and the status line."
+  (let ((screen (attachment-screen attachment)))
+    (when screen
+      (multiple-value-bind (width height)
+          (lispore.terminal:terminal-size screen)
+        (let* ((text (input-draft attachment))
+               (lines (input-lines text width))
+               (available-height (max 1 (1- height)))
+               (line-count (min available-height (length lines))))
+          (set-status-line screen (command-status-line attachment width))
+          (multiple-value-bind (cursor-row cursor-column)
+              (input-cursor-row-column
+               text
+               (input-cursor attachment)
+               width)
+            (let* ((line-offset
+                     (input-line-offset cursor-row line-count (length lines)))
+                   (input-top (+ 1 (- available-height line-count))))
+              (with-output-to-string (stream)
+                (write-string (render-terminal screen) stream)
+                (loop for index below line-count
+                      for line = (nth (+ line-offset index) lines)
+                      for row = (+ input-top index)
+                      do (format stream "~C[~D;1H~C[2K~A"
+                                 #\Escape row #\Escape line))
+                (format stream "~C[~D;~DH~C[?25h"
+                        #\Escape
+                        (+ input-top
+                           (max 0 (- cursor-row line-offset)))
+                        (1+ cursor-column)
+                        #\Escape)))))))))
+
+(defun write-command-frame (attachment output-fd)
+  "Write ATTACHMENT's command frame to OUTPUT-FD."
+  (when output-fd
+    (let ((frame (render-command-frame attachment)))
+      (when frame
+        (write-fd output-fd (encode-utf8 frame))))))
+
+(defun drain-command-output (attachment)
+  "Drain ATTACHMENT output and return EOF plus output state."
+  (let ((output-p nil))
+    (loop
+      (multiple-value-bind (bytes eof-p)
+          (read-attachment attachment :wait-p nil)
+        (when (and bytes (plusp (length bytes)))
+          (setf output-p t))
+        (cond
+          (eof-p (return (values t output-p)))
+          ((or (null bytes) (zerop (length bytes)))
+           (return (values nil output-p))))))))
+
+(defun handle-command-enter (attachment editor text)
+  "Apply Enter rules to one ATTACHMENT draft."
+  (case (input-completeness text)
+    (:incomplete
+     (input-editor-paste editor (string #\Newline)))
+    ((:complete :error)
+     (when (= (input-cursor attachment) (length text))
+       (submit-command attachment text (input-language text))))))
+
+(defun handle-command-input (attachment bytes)
+  "Apply input BYTES and return whether the frontend should close."
+  (let ((editor (attachment-input-editor attachment)))
+    (input-editor-set-history editor (input-history attachment))
+    (let ((byte (make-array 1 :element-type '(unsigned-byte 8)))
+          (close-p nil))
+      (loop for index below (length bytes)
+            while (not close-p)
+            do (setf (aref byte 0) (aref bytes index))
+               (dolist (event (input-editor-feed editor byte))
+                 (case (input-event-type event)
+                   (:enter
+                    (handle-command-enter attachment editor
+                                           (input-event-text event)))
+                   (:interrupt
+                    (interrupt-execution attachment)
+                    (input-editor-clear editor))
+                   (:eof
+                    (setf close-p t)))))
+      close-p)))
+
+(defun write-bracketed-paste-mode (output-fd enabled-p)
+  "Enable or disable bracketed paste on OUTPUT-FD."
+  (when output-fd
+    (write-fd output-fd
+              (encode-utf8
+               (if enabled-p
+                   (format nil "~C[?2004h" #\Escape)
+                   (format nil "~C[?2004l" #\Escape))))))
+
+(defun run-command (&key
+                         (attachment nil)
+                         (input-fd 0)
+                         (output-fd 1))
+  "Run the command frontend for ATTACHMENT."
+  (unless attachment
+    (error "The command frontend requires a managed attachment."))
+  (ensure-attachment-mode attachment :command)
+  (unwind-protect
+       (progn
+         (write-bracketed-paste-mode output-fd t)
+         (write-command-frame attachment output-fd)
+         (call-with-input-mode
+          input-fd
+          (lambda ()
+            (let ((input-open-p (not (null input-fd)))
+                  (finished-p nil)
+                  (last-draft nil)
+                  (last-state nil)
+                  (last-cursor nil))
+              (loop until finished-p
+                    do (multiple-value-bind (session-eof-p output-p)
+                           (drain-command-output attachment)
+                         (let ((draft (input-draft attachment))
+                               (state (execution-state attachment))
+                               (cursor (input-cursor attachment)))
+                           (when (or output-p
+                                     (not (equal draft last-draft))
+                                     (not (eq state last-state))
+                                     (not (eql cursor last-cursor)))
+                             (write-command-frame attachment output-fd)
+                             (setf last-draft draft
+                                   last-state state
+                                   last-cursor cursor)))
+                         (when session-eof-p
+                           (setf finished-p t))
+                         (unless finished-p
+                           (if input-open-p
+                               (let ((events
+                                       (poll-fds
+                                        (list (cons input-fd +pollin+))
+                                        :timeout +frontend-poll-timeout+)))
+                                 (when (event-readable-p events input-fd)
+                                   (multiple-value-bind (bytes eof-p)
+                                       (read-fd input-fd :wait-p nil)
+                                     (if eof-p
+                                         (setf finished-p t
+                                               input-open-p nil)
+                                         (when (and bytes
+                                                    (plusp (length bytes)))
+                                           (setf finished-p
+                                                 (handle-command-input
+                                                  attachment bytes)))))))
+                               (sleep 0.01)))))))))
+    (write-bracketed-paste-mode output-fd nil)
+    (ignore-errors (detach attachment)))
+  nil)
+
 (defun run-attachment-loop (attachment input-fd output-handler)
   "Run an attachment until it detaches or its session terminates."
   (let ((input-open-p (not (null input-fd))))
@@ -394,6 +611,10 @@
                                 (terminal nil))
   "Run a blocking shell frontend in MODE."
   (ecase mode
+    (:command
+     (run-command :attachment attachment
+                  :input-fd input-fd
+                  :output-fd output-fd))
     (:passthrough
      (run-passthrough :session session
                       :attachment attachment

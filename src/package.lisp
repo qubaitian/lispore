@@ -23,6 +23,28 @@
    #:decode-utf8-chunk
    #:encode-utf8))
 
+(defpackage #:lispore.input
+  (:use #:cl)
+  (:import-from #:lispore.utf8
+                #:decode-utf8-chunk)
+  (:export
+   #:input-editor
+   #:input-editor-add-draft-history
+   #:input-editor-clear
+   #:input-editor-clear-draft-history
+   #:input-editor-cursor
+   #:input-editor-feed
+   #:input-completeness
+   #:input-editor-paste
+   #:input-editor-record-submission
+   #:input-editor-set-draft
+   #:input-editor-set-history
+   #:input-editor-text
+   #:input-language
+   #:input-event-text
+   #:input-event-type
+   #:make-input-editor))
+
 (defpackage #:lispore.pty
   (:use #:cl)
   (:import-from #:lispore.platform
@@ -74,12 +96,25 @@
                 #:condition-notify
                 #:condition-wait
                 #:current-thread
+                #:interrupt-thread
                 #:join-thread
                 #:make-condition-variable
                 #:make-lock
                 #:make-thread
                 #:release-lock
                 #:with-lock-held)
+  (:import-from #:lispore.input
+                #:input-editor-add-draft-history
+                #:input-editor-clear
+                #:input-editor-clear-draft-history
+                #:input-completeness
+                #:input-editor-cursor
+                #:input-editor-record-submission
+                #:input-editor-set-draft
+                #:input-editor-set-history
+                #:input-editor-text
+                #:input-language
+                #:make-input-editor)
   (:import-from #:lispore.pty
                 #:close-session
                 #:read-output-bytes
@@ -92,10 +127,12 @@
                 #:make-terminal-emulator
                 #:set-status-line)
   (:import-from #:lispore.utf8
-                #:decode-utf8-chunk)
+                #:decode-utf8-chunk
+                #:encode-utf8)
   (:export
    #:attach-session
    #:attachment
+   #:attachment-input-editor
    #:attachment-mode
    #:attachment-session
    #:attachment-start-screen
@@ -103,7 +140,11 @@
    #:attachment-attached-p
    #:close-session-manager
    #:detach
+   #:execution-state
+   #:interrupt-execution
    #:input-draft
+   #:input-cursor
+   #:input-history
    #:lookup-session
    #:make-session-manager
    #:read-attachment
@@ -113,6 +154,8 @@
    #:session-running-p
    #:session-error
    #:session-id
+   #:publish-session-output
+   #:submit-command
    #:terminate-session
    #:set-input-draft
    #:start-session
@@ -142,10 +185,29 @@
                 #:write-input)
   (:import-from #:lispore.session
                 #:attachment-mode
+                #:attachment-input-editor
                 #:attachment-start-screen
+                #:attachment-screen
+                #:attachment-session
                 #:detach
+                #:execution-state
+                #:input-cursor
+                #:input-history
+                #:input-draft
                 #:read-attachment
+                #:session-id
+                #:interrupt-execution
+                #:submit-command
                 #:submit-input)
+  (:import-from #:lispore.input
+                #:input-editor-clear
+                #:input-completeness
+                #:input-editor-feed
+                #:input-language
+                #:input-editor-paste
+                #:input-editor-set-history
+                #:input-event-text
+                #:input-event-type)
   (:import-from #:lispore.terminal
                 #:*default-status-line-text*
                 #:feed-terminal
@@ -158,6 +220,7 @@
                 #:encode-utf8)
   (:export
    #:interactive-shell
+   #:run-command
    #:run-emulated
    #:run-passthrough))
 
@@ -165,6 +228,7 @@
   (:use #:cl)
   (:import-from #:lispore.frontend
                 #:interactive-shell
+                #:run-command
                 #:run-emulated
                 #:run-passthrough)
   (:import-from #:lispore.pty
@@ -182,12 +246,16 @@
   (:import-from #:lispore.session
                 #:attach-session
                 #:attachment-mode
+                #:attachment-input-editor
                 #:attachment-session
                 #:attachment-screen
                 #:attachment-attached-p
                 #:close-session-manager
                 #:detach
+                #:interrupt-execution
                 #:input-draft
+                #:input-cursor
+                #:input-history
                 #:lookup-session
                 #:make-session-manager
                 #:read-attachment
@@ -197,8 +265,10 @@
                 #:session-running-p
                 #:session-error
                 #:session-id
+                #:execution-state
                 #:set-input-draft
                 #:start-session
+                #:submit-command
                 #:terminate-session
                 #:submit-input)
   (:import-from #:lispore.terminal
@@ -218,6 +288,7 @@
   (:export
    #:attach-session
    #:attachment-attached-p
+   #:attachment-input-editor
    #:attachment-mode
    #:attachment-screen
    #:attachment-session
@@ -228,6 +299,9 @@
    #:detach
    #:feed-terminal
    #:input-draft
+   #:input-cursor
+   #:input-history
+   #:interrupt-execution
    #:interactive-shell
    #:lookup-session
    #:make-terminal-emulator
@@ -243,6 +317,7 @@
    #:restore-session
    #:reattach-session
    #:run-emulated
+   #:run-command
    #:run-passthrough
    #:screen-cell-character
    #:screen-cell-style
@@ -251,6 +326,7 @@
    #:session-eof-p
    #:session-running-p
    #:session-error
+   #:execution-state
    #:session-id
    #:session-open-p
    #:shell-session
@@ -258,6 +334,7 @@
    #:start-session
    #:start-shell
    #:submit-input
+   #:submit-command
    #:terminate-session
    #:terminal-emulator
    #:terminal-size

@@ -32,15 +32,16 @@ Run the command without arguments from the repository root.
 ```
 
 The command ensures a session manager before creating a new session.
-It attaches the passthrough frontend to that session.
+It attaches the command frontend to that session.
 The command provides `--help` and `--version` through Clingon.
 
 Passthrough mode forwards terminal bytes without interpretation.
 It preserves ANSI control sequences and UTF-8 text.
-Both frontend modes reserve the bottom row for a status line.
-The status line shows ` lispore | shell ` with green and black colors.
+Managed frontends reserve the bottom row for a status line.
+The command frontend routes Lisp forms and shell commands.
+The status line shows the session and execution state.
 
-This command starts the emulated frontend.
+This example starts the emulated frontend.
 
 ```sh
 sbcl --noinform --load init \
@@ -80,6 +81,7 @@ Frontend modes restore terminal settings after normal exit and errors.
 `make-session-manager` creates an in-process session registry.
 `start-session` creates a fixed-size shell and returns an opaque ID.
 `attach-session` creates a frontend attachment for a running session.
+Use `:mode :command` for the command frontend.
 Set `:mode :passthrough` when using the passthrough frontend.
 `restore-session` reattaches and returns the retained terminal screen.
 `reattach-session` provides the same operation with domain terminology.
@@ -87,6 +89,7 @@ Set `:mode :passthrough` when using the passthrough frontend.
 `read-attachment` reads output broadcast to that attachment.
 `set-input-draft` stores input privately for one attachment.
 `submit-input` submits one draft without interleaving concurrent input.
+`submit-command` evaluates Lisp or runs shell commands serially.
 `terminate-session` ends a managed session and prevents restoration.
 `session-error` returns a background reader error after termination.
 `close-session-manager` terminates its sessions during application cleanup.
