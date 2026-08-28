@@ -11,13 +11,29 @@ The project uses ocicl for dependency installation.
 ocicl install
 ```
 
-## Run
+## Build
 
-The passthrough frontend runs from the repository root.
+Build the standalone command from the repository root.
 
 ```sh
-sbcl --noinform --load init --load examples/interactive.lisp
+sbcl --noinform --load init \
+  --eval '(asdf:make "lispore/app")' \
+  --quit
 ```
+
+The build writes the executable to `bin/lispore`.
+
+## Run
+
+Run the command without arguments from the repository root.
+
+```sh
+./bin/lispore
+```
+
+The command ensures a session manager before creating a new session.
+It attaches the passthrough frontend to that session.
+The command provides `--help` and `--version` through Clingon.
 
 Passthrough mode forwards terminal bytes without interpretation.
 It preserves ANSI control sequences and UTF-8 text.
@@ -76,6 +92,8 @@ Set `:mode :passthrough` when using the passthrough frontend.
 `close-session-manager` terminates its sessions during application cleanup.
 
 The session manager retains final screens for a fixed time.
+The command keeps the manager in process memory.
+Detachment does not survive command exit.
 Existing attachments keep their final screen after termination.
 Natural shell exit rejects every new attachment.
 Service restart does not preserve in-memory sessions.

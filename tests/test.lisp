@@ -45,6 +45,29 @@
     for bytes = (read-attachment attachment :wait-p nil)
     while (and bytes (plusp (length bytes)))))
 
+(defun make-test-pipe ()
+  "Return readable and writable descriptors for a test pipe."
+  (cffi:with-foreign-object (descriptors :int 2)
+    (check (zerop (cffi:foreign-funcall "pipe"
+                                       :pointer descriptors
+                                       :int))
+           "The test pipe cannot be created.")
+    (values (cffi:mem-aref descriptors :int 0)
+            (cffi:mem-aref descriptors :int 1))))
+
+(defun drain-test-pipe (read-descriptor)
+  "Read all available text from READ-DESCRIPTOR without blocking."
+  (with-output-to-string (output)
+    (loop for events = (poll-fds (list (cons read-descriptor +pollin+))
+                                 :timeout 0)
+          while events
+          do (multiple-value-bind (bytes eof-p)
+                 (read-fd read-descriptor :wait-p nil)
+               (when (and bytes (plusp (length bytes)))
+                 (write-string (map 'string #'code-char bytes) output))
+               (when eof-p
+                 (return))))))
+
 (deftest detached-session-restores-retained-screen ()
   (let ((manager (make-session-manager :retention-seconds 5)))
     (unwind-protect
@@ -320,6 +343,58 @@
           (check (session-running-p session)
                  "Passthrough detachment terminates the shell session."))
       (close-session-manager manager))))
+
+(deftest attached-passthrough-redraws-status-line-after-reset ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (multiple-value-bind (read-pipe write-pipe)
+        (make-test-pipe)
+      (unwind-protect
+          (let* ((session-id (start-session manager
+                                            :shell "/bin/sh"
+                                            :width 20
+                                            :height 4))
+                 (attachment (attach-session manager
+                                             session-id
+                                             :mode :passthrough))
+                 (captured "")
+                 (thread
+                   (make-thread
+                    (lambda ()
+                      (run-passthrough :attachment attachment
+                                       :input-fd nil
+                                       :output-fd write-pipe)))))
+            (set-input-draft attachment
+                             (format nil
+                                     "printf '\\033c'; printf 'status-marker\\n'; sleep 1~%"))
+            (check (submit-input attachment)
+                   "The reset test input is rejected.")
+            (check
+             (wait-until
+              (lambda ()
+                (setf captured
+                      (concatenate 'string
+                                   captured
+                                   (drain-test-pipe read-pipe)))
+                (and
+                 (let* ((reset-position
+                          (search (format nil "~Cc" #\Escape) captured))
+                        (status-position
+                          (and reset-position
+                               (search (format nil "~C[30;42m" #\Escape)
+                                       captured
+                                       :start2 reset-position))))
+                   (and (search "status-marker" captured)
+                        reset-position
+                        status-position
+                        (> status-position reset-position)))
+                 (attachment-attached-p attachment))))
+             "Attached output removes the status line.")
+            (check (detach attachment)
+                   "The reset test attachment cannot detach.")
+            (join-thread thread))
+        (close-pty read-pipe)
+        (close-pty write-pipe)
+        (close-session-manager manager)))))
 
 (deftest terminal-writes-text ()
   (let ((terminal (make-terminal-emulator :width 8 :height 2)))

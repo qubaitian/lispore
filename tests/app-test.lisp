@@ -1,0 +1,10 @@
+(in-package #:lispore.tests)
+
+(deftest application-command-wires-clingon ()
+  (let ((command (lispore.app::make-application-command)))
+    (check (string= "lispore" (clingon:command-name command))
+           "The application command has the wrong name.")
+    (check (string= "0.1.0" (clingon:command-version command))
+           "The application command has the wrong version.")
+    (check (functionp (clingon:command-handler command))
+           "The application command has no handler.")))

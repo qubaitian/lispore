@@ -48,5 +48,9 @@
                 #:encode-utf8)
   (:import-from #:lispore.platform
                 #:call-with-raw-terminal
+                #:close-pty
+                #:+pollin+
+                #:poll-fds
+                #:read-fd
                 #:tty-p)
   (:export #:run-tests))

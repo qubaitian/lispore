@@ -13,6 +13,10 @@ _Avoid_: command, terminal process
 The shell named by the user's `$SHELL` setting.
 _Avoid_: zsh
 
+**Session manager**:
+A registry that owns shell sessions and their attachments.
+_Avoid_: session service, session daemon
+
 **PTY**:
 A pseudo-terminal pair that gives a child process terminal behavior.
 _Avoid_: pipe

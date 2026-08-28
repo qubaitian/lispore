@@ -230,17 +230,20 @@
     (write-fd output-fd (encode-utf8 (render-terminal terminal)))))
 
 (defun drain-attached-passthrough-output (attachment output-fd)
-  "Forward all currently available bytes from ATTACHMENT."
-  (loop
-    (multiple-value-bind (bytes eof-p)
-        (read-attachment attachment :wait-p nil)
-      (when (and bytes (plusp (length bytes)) output-fd)
-        (write-fd output-fd bytes))
-      (cond
-        (eof-p (return t))
-        ((or (null bytes) (zerop (length bytes)))
-         (return nil))
-        (t nil)))))
+  "Forward available bytes from ATTACHMENT and report whether output arrived."
+  (let ((output-p nil))
+    (loop
+      (multiple-value-bind (bytes eof-p)
+          (read-attachment attachment :wait-p nil)
+        (when (and bytes (plusp (length bytes)))
+          (setf output-p t)
+          (when output-fd
+            (write-fd output-fd bytes)))
+        (cond
+          (eof-p (return (values t output-p)))
+          ((or (null bytes) (zerop (length bytes)))
+           (return (values nil output-p)))
+          (t nil))))))
 
 (defun make-attached-emulated-output-handler
     (attachment terminal output-fd initial-pending-bytes)
@@ -274,24 +277,30 @@
   (multiple-value-bind (terminal ignored-pending-bytes)
       (attachment-start-screen attachment)
     (declare (ignore ignored-pending-bytes))
-    (unwind-protect
-        (progn
-          (write-terminal terminal output-fd)
-          (call-with-input-mode
-           input-fd
-           (lambda ()
-             (run-attachment-loop
-              attachment
-              input-fd
-              (lambda ()
-                (drain-attached-passthrough-output attachment output-fd))))))
-      (when terminal
-        (ignore-errors
-          (multiple-value-bind (ignored-width height)
-              (lispore.terminal:terminal-size terminal)
-            (declare (ignore ignored-width))
-            (clear-passthrough-status-line output-fd height))))
-      (ignore-errors (detach attachment)))
+    (multiple-value-bind (width height)
+        (lispore.terminal:terminal-size terminal)
+      (unwind-protect
+          (progn
+            (write-terminal terminal output-fd)
+            ;; Restore the reserved scroll region after rendering the screen.
+            (write-passthrough-status-line output-fd width height)
+            (call-with-input-mode
+             input-fd
+             (lambda ()
+               (run-attachment-loop
+                attachment
+                input-fd
+                (lambda ()
+                  (multiple-value-bind (eof-p output-p)
+                      (drain-attached-passthrough-output attachment output-fd)
+                    (when (and output-p (not eof-p))
+                      (write-passthrough-status-line
+                       output-fd
+                       width
+                       height))
+                    eof-p))))))
+        (ignore-errors (clear-passthrough-status-line output-fd height))
+        (ignore-errors (detach attachment))))
     nil))
 
 (defun run-attached-emulated (attachment input-fd output-fd)
