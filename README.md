@@ -41,16 +41,13 @@ Managed frontends reserve the bottom row for a status line.
 The command frontend routes Lisp forms and shell commands.
 The status line shows the session and execution state.
 
-This example starts the emulated frontend.
+This example starts the passthrough frontend directly.
 
 ```sh
 sbcl --noinform --load init \
   --eval '(asdf:load-system "lispore")' \
-  --eval '(lispore:interactive-shell :mode :emulated)'
+  --eval '(lispore:run-passthrough)'
 ```
-
-Emulated mode renders a screen grid.
-It handles common ANSI cursor, erase, and style sequences.
 
 ## Session interface
 
@@ -74,13 +71,15 @@ It handles common ANSI cursor, erase, and style sequences.
     (lispore:close-session session)))
 ```
 
-Frontend modes restore terminal settings after normal exit and errors.
+The command and passthrough frontends restore terminal settings.
 
 ## Managed sessions
 
 `make-session-manager` creates an in-process session registry.
 `start-session` creates a fixed-size shell and returns an opaque ID.
+`start-session` uses the command frontend by default.
 `attach-session` creates a frontend attachment for a running session.
+`attach-session` uses the command frontend by default.
 Use `:mode :command` for the command frontend.
 Set `:mode :passthrough` when using the passthrough frontend.
 `restore-session` reattaches and returns the retained terminal screen.

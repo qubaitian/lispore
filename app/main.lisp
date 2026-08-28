@@ -29,15 +29,11 @@
       (terminal-dimensions)
     (let* ((session-id (start-session manager
                                      :width width
-                                     :height height
-                                     :mode :command))
-           (attachment (attach-session manager
-                                       session-id
-                                       :mode :command)))
+                                     :height height))
+           (attachment (attach-session manager session-id)))
       (unless attachment
         (error "The new shell session cannot accept an attachment."))
-      (interactive-shell :mode :command
-                         :attachment attachment))))
+      (interactive-shell :attachment attachment))))
 
 (defun application-handler (command)
   "Run one new managed shell session."

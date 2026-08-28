@@ -1,6 +1,6 @@
 # Manage detachable PTY sessions in process
 
-ADR-0001 excludes detachment from the MVP.
+Earlier scope excludes detachment from the MVP.
 This decision supersedes that scope exclusion.
 The low-level shell session still stays separate from display behavior.
 Managed sessions own shared display state for attached frontends.

@@ -17,6 +17,7 @@
   (:import-from #:lispore
                 #:attach-session
                 #:attachment-attached-p
+                #:attachment-mode
                 #:attachment-screen
                 #:close-session
                 #:close-session-manager
@@ -30,7 +31,6 @@
                 #:input-history
                 #:lookup-session
                 #:make-session-manager
-                #:run-emulated
                 #:run-passthrough
                 #:make-terminal-emulator
                 #:read-output
@@ -45,6 +45,7 @@
                 #:screen-cell-style
                 #:session-running-p
                 #:restore-session
+                #:reattach-session
                 #:set-input-draft
                 #:set-status-line
                 #:session-open-p

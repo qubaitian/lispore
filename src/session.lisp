@@ -138,9 +138,6 @@
    (start-screen
     :initarg :start-screen
     :reader stored-attachment-start-screen)
-   (start-pending-bytes
-    :initarg :start-pending-bytes
-    :reader stored-attachment-start-pending-bytes)
    (final-screen
     :initform nil
     :accessor attachment-final-screen)
@@ -219,7 +216,7 @@
         do (setf start (1+ position))))
 
 (defun prepare-command-shell (shell-session)
-  "Hide the interactive shell prompt and input echo for command mode."
+  "Hide the interactive shell prompt and input echo for the command frontend."
   (write-input
    shell-session
    (format nil
@@ -304,17 +301,21 @@
       (purge-expired-sessions manager)
       (gethash session-id (manager-sessions manager)))))
 
+(defun valid-session-mode-p (mode)
+  "Return true when MODE names a supported frontend mode."
+  (member mode '(:passthrough :command) :test #'eq))
+
 (defun start-session (manager &key
                                 (shell (current-shell))
                                 (width 80)
                                 (height 24)
-                                (mode :emulated))
+                                (mode :command))
   "Start a fixed-size shell and return its opaque registry ID."
   (check-type manager session-manager)
   (check-type width (integer 1))
   (check-type height (integer 1))
-  (unless (member mode '(:passthrough :emulated :command) :test #'eq)
-    (error "Session mode must be :PASSTHROUGH, :EMULATED, or :COMMAND."))
+  (unless (valid-session-mode-p mode)
+    (error "Session mode must be :PASSTHROUGH or :COMMAND."))
   (let* ((shell-session (start-shell :shell shell
                                      :width width
                                      :height (shell-height height)))
@@ -410,10 +411,7 @@
   (let ((session (attachment-session attachment)))
     (with-lock-held ((session-lock session))
       (when (session-screen-available-under-lock-p session)
-        (values (copy-terminal (stored-attachment-start-screen attachment))
-                (and (stored-attachment-start-pending-bytes attachment)
-                     (copy-seq
-                      (stored-attachment-start-pending-bytes attachment))))))))
+        (copy-terminal (stored-attachment-start-screen attachment))))))
 
 (defun attachment-attached-p (attachment)
   "Return true while ATTACHMENT remains connected."
@@ -432,15 +430,11 @@
             (copy-terminal (attachment-final-screen attachment))
             (copy-terminal (managed-terminal session)))))))
 
-(defun valid-attachment-mode-p (mode)
-  "Return true when MODE names a supported frontend mode."
-  (member mode '(:passthrough :emulated :command) :test #'eq))
-
-(defun attach-session (manager session-id &key (mode :emulated))
+(defun attach-session (manager session-id &key (mode :command))
   "Attach a frontend to a running session and return its attachment."
   (check-type manager session-manager)
-  (unless (valid-attachment-mode-p mode)
-    (error "Attachment mode must be :PASSTHROUGH, :EMULATED, or :COMMAND."))
+  (unless (valid-session-mode-p mode)
+    (error "Attachment mode must be :PASSTHROUGH or :COMMAND."))
   (let ((session (lookup-session manager session-id)))
     (when session
       (with-lock-held ((session-lock session))
@@ -453,10 +447,6 @@
                    (make-instance 'attachment
                                   :session session
                                   :start-screen start-screen
-                                  :start-pending-bytes
-                                  (and (session-pending-bytes session)
-                                       (copy-seq
-                                        (session-pending-bytes session)))
                                   :mode mode
                                   :input-editor
                                   (make-input-editor
@@ -466,14 +456,14 @@
             (push attachment (session-attachments session))
             (values attachment (copy-terminal start-screen))))))))
 
-(defun restore-session (manager session-id &key (mode :emulated))
+(defun restore-session (manager session-id &key (mode :command))
   "Reattach to a running session and return its retained screen."
   (multiple-value-bind (attachment screen)
       (attach-session manager session-id :mode mode)
     (when attachment
       (values attachment screen))))
 
-(defun reattach-session (manager session-id &key (mode :emulated))
+(defun reattach-session (manager session-id &key (mode :command))
   "Reattach to a running session using the canonical lifecycle term."
   (restore-session manager session-id :mode mode))
 

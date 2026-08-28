@@ -176,10 +176,8 @@
   (:import-from #:lispore.pty
                 #:close-session
                 #:pty-master
-                #:read-output
                 #:read-output-bytes
                 #:resize-session
-                #:session-eof-p
                 #:start-shell
                 #:wait-for-session
                 #:write-input)
@@ -210,18 +208,13 @@
                 #:input-event-type)
   (:import-from #:lispore.terminal
                 #:*default-status-line-text*
-                #:feed-terminal
-                #:make-terminal-emulator
                 #:render-terminal
-                #:resize-terminal
                 #:set-status-line)
   (:import-from #:lispore.utf8
-                #:decode-utf8-chunk
                 #:encode-utf8)
   (:export
    #:interactive-shell
    #:run-command
-   #:run-emulated
    #:run-passthrough))
 
 (defpackage #:lispore
@@ -229,7 +222,6 @@
   (:import-from #:lispore.frontend
                 #:interactive-shell
                 #:run-command
-                #:run-emulated
                 #:run-passthrough)
   (:import-from #:lispore.pty
                 #:close-session
@@ -316,7 +308,6 @@
    #:retained-screen
    #:restore-session
    #:reattach-session
-   #:run-emulated
    #:run-command
    #:run-passthrough
    #:screen-cell-character

@@ -128,12 +128,8 @@ A frontend that forwards terminal input and output without interpretation.
 _Avoid_: raw mode
 
 **Terminal emulator**:
-A frontend that turns terminal output into screen cells.
+A display component that turns terminal output into screen cells.
 _Avoid_: terminal renderer
-
-**Emulated mode**:
-A frontend that uses a terminal emulator and renders its screen cells.
-_Avoid_: passthrough mode
 
 **Screen grid**:
 A rectangular display made of character cells and text styles.

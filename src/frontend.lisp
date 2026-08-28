@@ -431,21 +431,6 @@
           (when owned-session-p
             (close-session session))))))
 
-(defun drain-emulated-output (session terminal)
-  (let ((changed-p nil))
-    (loop
-      for text = (read-output session :wait-p nil)
-      do (cond
-           ((null text) (return (values changed-p t)))
-           ((zerop (length text)) (return (values changed-p nil)))
-           (t
-            (feed-terminal terminal text)
-            (setf changed-p t))))))
-
-(defun write-terminal (terminal output-fd)
-  (when output-fd
-    (write-fd output-fd (encode-utf8 (render-terminal terminal)))))
-
 (defun drain-attached-passthrough-output (attachment output-fd)
   "Forward available bytes from ATTACHMENT and report whether output arrived."
   (let ((output-p nil))
@@ -462,38 +447,15 @@
            (return (values nil output-p)))
           (t nil))))))
 
-(defun make-attached-emulated-output-handler
-    (attachment terminal output-fd initial-pending-bytes)
-  "Create a handler that feeds ATTACHMENT bytes into TERMINAL."
-  (let ((pending-bytes initial-pending-bytes))
-    (lambda ()
-      (let ((changed-p nil))
-        (loop
-          (multiple-value-bind (bytes eof-p)
-              (read-attachment attachment :wait-p nil)
-            (cond
-              (eof-p
-               (when changed-p
-                 (write-terminal terminal output-fd))
-               (return t))
-              ((or (null bytes) (zerop (length bytes)))
-               (when changed-p
-                 (write-terminal terminal output-fd))
-               (return nil))
-              (t
-               (multiple-value-bind (text remaining)
-                   (decode-utf8-chunk bytes pending-bytes)
-                 (setf pending-bytes remaining)
-                 (when (plusp (length text))
-                   (feed-terminal terminal text)
-                   (setf changed-p t)))))))))))
+(defun write-terminal (terminal output-fd)
+  "Write TERMINAL's screen to OUTPUT-FD."
+  (when output-fd
+    (write-fd output-fd (encode-utf8 (render-terminal terminal)))))
 
 (defun run-attached-passthrough (attachment input-fd output-fd)
   "Run a passthrough frontend from ATTACHMENT."
   (ensure-attachment-mode attachment :passthrough)
-  (multiple-value-bind (terminal ignored-pending-bytes)
-      (attachment-start-screen attachment)
-    (declare (ignore ignored-pending-bytes))
+  (let ((terminal (attachment-start-screen attachment)))
     (multiple-value-bind (width height)
         (lispore.terminal:terminal-size terminal)
       (unwind-protect
@@ -520,109 +482,11 @@
         (ignore-errors (detach attachment))))
     nil))
 
-(defun run-attached-emulated (attachment input-fd output-fd)
-  "Run an emulated frontend from ATTACHMENT."
-  (ensure-attachment-mode attachment :emulated)
-  (multiple-value-bind (terminal pending-bytes)
-      (attachment-start-screen attachment)
-    (unwind-protect
-        (progn
-          (set-status-line terminal *default-status-line-text*)
-          (write-terminal terminal output-fd)
-          (call-with-input-mode
-           input-fd
-           (lambda ()
-             (run-attachment-loop
-              attachment
-              input-fd
-              (make-attached-emulated-output-handler
-               attachment
-               terminal
-               output-fd
-               pending-bytes)))))
-      (ignore-errors (detach attachment)))
-    (values nil terminal)))
-
-(defun run-emulated (&key (session nil)
-                          (terminal nil)
-                          (input-fd 0)
-                          (output-fd 1)
-                          (attachment nil))
-  "Run an emulated frontend until SESSION exits."
-  (when (and session attachment)
-    (error "A frontend cannot receive both a session and an attachment."))
-  (when (and terminal attachment)
-    (error "An attachment must restore its own retained terminal screen."))
-  (if attachment
-      (run-attached-emulated attachment input-fd output-fd)
-      (let* ((owned-session-p (null session))
-             (session (or session (start-shell)))
-             (terminal (or terminal
-                           (multiple-value-bind (width height)
-                               (terminal-dimensions input-fd)
-                             (make-terminal-emulator
-                              :width width
-                              :height height))))
-             (width nil)
-             (height nil))
-        (unwind-protect
-            (progn
-              (set-status-line terminal *default-status-line-text*)
-              (multiple-value-setq (width height)
-                (lispore.terminal:terminal-size terminal))
-              (resize-session session width (frontend-content-height height))
-              (write-terminal terminal output-fd)
-              (call-with-input-mode
-               input-fd
-               (lambda ()
-                 (run-frontend-loop
-                  session
-                  input-fd
-                  (lambda ()
-                    (multiple-value-bind (changed-p eof-p)
-                        (drain-emulated-output session terminal)
-                      (when changed-p
-                        (write-terminal terminal output-fd))
-                      eof-p))
-                  :cycle-handler
-                  (lambda ()
-                    (when input-fd
-                      (multiple-value-bind (new-width new-height)
-                          (terminal-dimensions input-fd)
-                        (unless (and (= new-width width)
-                                     (= new-height height))
-                          (setf width new-width
-                                height new-height)
-                          (resize-terminal terminal width height)
-                          (resize-session
-                           session
-                           width
-                           (frontend-content-height height))
-                          (write-terminal terminal output-fd))))))))
-              (values (wait-for-session session) terminal))
-          (when owned-session-p
-            (close-session session))))))
-
-(defun interactive-shell (&key (mode :passthrough)
-                                (session nil)
+(defun interactive-shell (&key
                                 (attachment nil)
                                 (input-fd 0)
-                                (output-fd 1)
-                                (terminal nil))
-  "Run a blocking shell frontend in MODE."
-  (ecase mode
-    (:command
-     (run-command :attachment attachment
-                  :input-fd input-fd
-                  :output-fd output-fd))
-    (:passthrough
-     (run-passthrough :session session
-                      :attachment attachment
-                      :input-fd input-fd
-                      :output-fd output-fd))
-    (:emulated
-     (run-emulated :session session
-                   :attachment attachment
-                   :terminal terminal
-                   :input-fd input-fd
-                   :output-fd output-fd))))
+                                (output-fd 1))
+  "Run the command frontend for ATTACHMENT."
+  (run-command :attachment attachment
+               :input-fd input-fd
+               :output-fd output-fd))

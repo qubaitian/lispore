@@ -216,27 +216,60 @@
                  "The session does not retain submitted input history."))
       (close-session-manager manager))))
 
-(deftest command-session-rejects-incompatible-attachments ()
+(deftest session-defaults-to-command-frontend-and-rejects-unsupported-mode ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((session-id (start-session manager :shell "/bin/sh"))
+               (attachment (attach-session manager session-id))
+               (start-error-p nil)
+               (attach-error-p nil)
+               (restore-error-p nil)
+               (reattach-error-p nil))
+          (check (eq :command (attachment-mode attachment))
+                 "A session does not default to the command frontend.")
+          (handler-case
+              (start-session manager :shell "/bin/sh" :mode :emulated)
+            (error () (setf start-error-p t)))
+          (handler-case
+              (attach-session manager session-id :mode :emulated)
+            (error () (setf attach-error-p t)))
+          (handler-case
+              (restore-session manager session-id :mode :emulated)
+            (error () (setf restore-error-p t)))
+          (handler-case
+              (reattach-session manager session-id :mode :emulated)
+            (error () (setf reattach-error-p t)))
+          (check start-error-p
+                 "A session accepts an unsupported mode.")
+          (check attach-error-p
+                 "An attachment accepts an unsupported mode.")
+          (check restore-error-p
+                 "Session restoration accepts an unsupported mode.")
+          (check reattach-error-p
+                 "Session reattachment accepts an unsupported mode."))
+      (close-session-manager manager))))
+
+(deftest session-modes-reject-incompatible-attachments ()
   (let ((manager (make-session-manager :retention-seconds 5)))
     (unwind-protect
         (let ((command-id (start-session manager
                                          :shell "/bin/sh"
                                          :mode :command))
-              (emulated-id (start-session manager
-                                          :shell "/bin/sh"
-                                          :mode :emulated)))
-          (let ((command-error-p nil)
-                (emulated-error-p nil))
-            (handler-case
-                (attach-session manager command-id :mode :emulated)
-              (error () (setf command-error-p t)))
-            (handler-case
-                (attach-session manager emulated-id :mode :command)
-              (error () (setf emulated-error-p t)))
-            (check command-error-p
-                   "A command session accepts an incompatible frontend.")
-            (check emulated-error-p
-                   "An emulated session accepts the command frontend.")))
+              (passthrough-id (start-session manager
+                                             :shell "/bin/sh"
+                                             :mode :passthrough))
+              (command-error-p nil)
+              (passthrough-error-p nil))
+          (handler-case
+              (attach-session manager command-id :mode :passthrough)
+            (error () (setf command-error-p t)))
+          (handler-case
+              (attach-session manager passthrough-id :mode :command)
+            (error () (setf passthrough-error-p t)))
+          (check command-error-p
+                 "A command session accepts passthrough mode.")
+          (check passthrough-error-p
+                 "A passthrough session accepts command mode."))
       (close-session-manager manager))))
 
 (deftest command-session-rejects-mismatched-language ()
@@ -705,10 +738,11 @@
         (let* ((session-id (start-session manager
                                           :shell "/bin/sh"
                                           :width 20
-                                          :height 4))
+                                          :height 4
+                                          :mode :passthrough))
                (session (lookup-session manager session-id)))
           (multiple-value-bind (attachment screen)
-              (restore-session manager session-id)
+              (restore-session manager session-id :mode :passthrough)
             (check attachment
                    "The session does not accept its first attachment.")
             (check (not (screen-has-text-p screen "detach-marker"))
@@ -727,7 +761,7 @@
             (check (session-running-p session)
                    "Detachment terminates the shell session.")
             (multiple-value-bind (restored screen)
-                (restore-session manager session-id)
+                (restore-session manager session-id :mode :passthrough)
               (check restored
                      "The running session cannot be restored.")
               (check (screen-has-text-p screen "detach-marker")
@@ -742,7 +776,8 @@
                      "The restored shell session does not terminate.")
               (check (not (attachment-attached-p restored))
                      "Session termination leaves the attachment connected.")
-              (check (null (restore-session manager session-id))
+              (check (null (restore-session manager session-id
+                                            :mode :passthrough))
                      "The terminated session accepts a new attachment.")
               (check (screen-has-text-p (attachment-screen restored)
                                         "restore-marker")
@@ -755,9 +790,10 @@
         (let ((session-id (start-session manager
                                          :shell "/bin/sh"
                                          :width 20
-                                         :height 4)))
-          (let ((first (attach-session manager session-id))
-                (second (attach-session manager session-id)))
+                                         :height 4
+                                         :mode :passthrough)))
+          (let ((first (attach-session manager session-id :mode :passthrough))
+                (second (attach-session manager session-id :mode :passthrough)))
             (check (and first second)
                    "The session does not accept two attachments.")
             (set-input-draft first
@@ -777,9 +813,11 @@
 (deftest attachments-keep-private-input-drafts ()
   (let ((manager (make-session-manager :retention-seconds 5)))
     (unwind-protect
-        (let* ((session-id (start-session manager :shell "/bin/sh"))
-               (first (attach-session manager session-id))
-               (second (attach-session manager session-id)))
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :passthrough))
+               (first (attach-session manager session-id :mode :passthrough))
+               (second (attach-session manager session-id :mode :passthrough)))
           (set-input-draft first "printf 'draft-marker\\n'")
           (set-input-draft second "printf 'other-draft\\n'")
           (check (and (string= "printf 'draft-marker\\n'"
@@ -808,9 +846,11 @@
                   :retention-seconds 5
                   :max-buffer-bytes 8192)))
     (unwind-protect
-        (let* ((session-id (start-session manager :shell "/bin/sh"))
-               (slow (attach-session manager session-id))
-               (healthy (attach-session manager session-id)))
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :passthrough))
+               (slow (attach-session manager session-id :mode :passthrough))
+               (healthy (attach-session manager session-id :mode :passthrough)))
           (set-input-draft healthy
                            (format nil
                                    "i=0; while [ $i -lt 100 ]; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; i=$((i+1)); done; sleep 1~%"))
@@ -832,9 +872,11 @@
                   :retention-seconds 5
                   :max-buffer-bytes 32)))
     (unwind-protect
-        (let* ((session-id (start-session manager :shell "/bin/sh"))
-               (slow (attach-session manager session-id))
-               (writer (attach-session manager session-id))
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :passthrough))
+               (slow (attach-session manager session-id :mode :passthrough))
+               (writer (attach-session manager session-id :mode :passthrough))
                (result nil)
                (reader nil)
                (ready-lock (make-lock "reader readiness"))
@@ -871,9 +913,13 @@
 (deftest terminated-session-retains-screen-for-a-fixed-time ()
   (let ((manager (make-session-manager :retention-seconds 0.2)))
     (unwind-protect
-        (let* ((session-id (start-session manager :shell "/bin/sh"))
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :passthrough))
                (session (lookup-session manager session-id))
-               (attachment (attach-session manager session-id)))
+               (attachment (attach-session manager
+                                            session-id
+                                            :mode :passthrough)))
           (set-input-draft attachment
                            (format nil "printf 'final-marker\\n'; exit~%"))
           (check (submit-input attachment)
@@ -908,45 +954,12 @@
                  "Explicit termination allows restoration."))
       (close-session-manager manager))))
 
-(deftest emulated-frontend-can-run-from-an-attachment ()
-  (let ((manager (make-session-manager :retention-seconds 5)))
-    (unwind-protect
-        (let* ((session-id (start-session manager :shell "/bin/sh"))
-               (session (lookup-session manager session-id))
-               (attachment (attach-session manager session-id))
-               (result nil)
-               (thread
-                 (make-thread
-                  (lambda ()
-                    (multiple-value-bind (status terminal)
-                        (run-emulated :attachment attachment
-                                      :input-fd nil
-                                      :output-fd nil)
-                      (setf result (list status terminal)))))))
-          (sleep 0.05)
-          (set-input-draft attachment
-                           (format nil "printf 'frontend-marker\\n'; sleep 1~%"))
-          (check (submit-input attachment)
-                 "The attached frontend cannot submit input.")
-          (check (wait-until
-                  (lambda ()
-                    (screen-has-text-p (attachment-screen attachment)
-                                       "frontend-marker")))
-                 "The attached frontend does not receive output.")
-          (check (detach attachment)
-                 "The attached frontend cannot detach.")
-          (join-thread thread)
-          (check (and result
-                      (screen-has-text-p (second result) "frontend-marker"))
-                 "The frontend does not retain its final screen after detach.")
-          (check (session-running-p session)
-                 "Frontend detachment terminates the shell session."))
-      (close-session-manager manager))))
-
 (deftest passthrough-frontend-can-run-from-an-attachment ()
   (let ((manager (make-session-manager :retention-seconds 5)))
     (unwind-protect
-        (let* ((session-id (start-session manager :shell "/bin/sh"))
+        (let* ((session-id (start-session manager
+                                          :shell "/bin/sh"
+                                          :mode :passthrough))
                (session (lookup-session manager session-id))
                (attachment (attach-session manager session-id :mode :passthrough))
                (finished-p nil)
@@ -983,7 +996,8 @@
           (let* ((session-id (start-session manager
                                             :shell "/bin/sh"
                                             :width 20
-                                            :height 4))
+                                            :height 4
+                                            :mode :passthrough))
                  (attachment (attach-session manager
                                              session-id
                                              :mode :passthrough))
@@ -1183,42 +1197,6 @@
                                              :input-fd nil
                                              :output-fd nil))
                  "The passthrough frontend has no exit status."))
-      (close-session session))))
-
-(deftest emulated-frontend-updates-a-screen ()
-  (let ((session (start-shell :shell "/bin/sh" :width 80 :height 24))
-        (terminal (make-terminal-emulator :width 80 :height 24)))
-    (unwind-protect
-        (progn
-          (write-input session (format nil "printf 'emulated-marker\\n'; exit~%"))
-          (multiple-value-bind (status result)
-              (run-emulated :session session
-                            :terminal terminal
-                            :input-fd nil
-                            :output-fd nil)
-            (check (integerp status)
-                   "The emulated frontend has no exit status.")
-            (check (some (lambda (line) (search "emulated-marker" line))
-                         (screen-lines result))
-                   "The emulated frontend loses shell output.")))
-      (close-session session))))
-
-(deftest emulated-frontend-reserves-status-line-height ()
-  (let ((session (start-shell :shell "/bin/sh" :width 20 :height 4))
-        (terminal (make-terminal-emulator :width 20 :height 4)))
-    (unwind-protect
-        (progn
-          (write-input session (format nil "stty size; exit~%"))
-          (run-emulated :session session
-                        :terminal terminal
-                        :input-fd nil
-                        :output-fd nil)
-          (check (some (lambda (line) (search "3 20" line))
-                       (screen-lines terminal))
-                 "The emulated frontend does not reserve status height.")
-          (check (string= " lispore | shell    "
-                          (first (last (screen-lines terminal))))
-                 "The emulated frontend loses its status line."))
       (close-session session))))
 
 (defun terminal-settings (fd)

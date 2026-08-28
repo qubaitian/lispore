@@ -14,5 +14,5 @@ This lets shell output overwrite the status line.
 
 ## Consequences
 
-Both frontend modes show the same status line.
+The command and passthrough frontends show the same status line.
 The PTY receives one fewer row than the terminal display.
