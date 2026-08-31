@@ -351,7 +351,8 @@
                                                  (handle-command-input
                                                   attachment bytes)))))))
                                (sleep 0.01)))))))))
-    (write-bracketed-paste-mode output-fd nil)
+    ;; A disconnected frontend must still detach its session.
+    (ignore-errors (write-bracketed-paste-mode output-fd nil))
     (ignore-errors (detach attachment)))
   nil)
 

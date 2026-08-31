@@ -77,6 +77,13 @@
   (pid :int)
   (signal :int))
 
+(defcfun ("setsockopt" %setsockopt) :int
+  (socket :int)
+  (level :int)
+  (option :int)
+  (value :pointer)
+  (length :unsigned-int))
+
 (defcfun ("isatty" %isatty) :int
   (fd :int))
 
@@ -99,6 +106,9 @@
 
 (defconstant +f-getfl+ 3)
 (defconstant +f-setfl+ 4)
+(defconstant +f-getfd+ 1)
+(defconstant +f-setfd+ 2)
+(defconstant +fd-cloexec+ 1)
 (defconstant +o-nonblock+ 4)
 (defconstant +pollin+ #x0001)
 (defconstant +pollout+ #x0004)
@@ -116,6 +126,8 @@
 (defconstant +sighup+ 1)
 (defconstant +sigterm+ 15)
 (defconstant +sigkill+ 9)
+(defconstant +sol-socket+ #xffff)
+(defconstant +so-nosigpipe+ #x1022)
 
 ;; These values match macOS arm64 terminal and polling headers.
 
@@ -155,6 +167,14 @@
     (when (= (%fcntl fd +f-setfl+ :int (logior flags +o-nonblock+)) -1)
       (signal-platform-error "fcntl(F_SETFL)"))))
 
+(defun set-close-on-exec (fd)
+  "Prevent FD from leaking into an exec'ed child process."
+  (let ((flags (%fcntl fd +f-getfd+)))
+    (when (= flags -1)
+      (signal-platform-error "fcntl(F_GETFD)"))
+    (when (= (%fcntl fd +f-setfd+ :int (logior flags +fd-cloexec+)) -1)
+      (signal-platform-error "fcntl(F_SETFD)"))))
+
 (defun start-pty (shell width height)
   "Start SHELL inside a non-blocking PTY."
   (check-type shell string)
@@ -177,8 +197,9 @@
           (t
            (let ((fd (mem-ref master :int)))
              (handler-case
-                 (progn
+               (progn
                    (set-nonblocking fd)
+                   (set-close-on-exec fd)
                    (values fd pid))
                (error (condition)
                  (ignore-errors (%close-fd fd))
@@ -301,6 +322,18 @@
   (when (and (minusp (%kill pid +sighup+))
              (/= (current-errno) +esrch+))
     (signal-platform-error "kill(SIGHUP)"))
+  t)
+
+(defun prevent-socket-sigpipe (fd)
+  "Prevent a closed socket from terminating the Lisp process."
+  (with-foreign-object (value :int)
+    (setf (mem-ref value :int) 1)
+    (when (minusp (%setsockopt fd
+                               +sol-socket+
+                               +so-nosigpipe+
+                               value
+                               (foreign-type-size :int)))
+      (signal-platform-error "setsockopt(SO_NOSIGPIPE)")))
   t)
 
 (defun close-pty (fd)

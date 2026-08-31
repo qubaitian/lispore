@@ -249,6 +249,66 @@
                  "Session reattachment accepts an unsupported mode."))
       (close-session-manager manager))))
 
+(deftest named-sessions-find-or-create-once-and-report-errors ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+        (let* ((first (find-or-create-session manager
+                                              "s1"
+                                              :shell "/bin/sh"
+                                              :width 40
+                                              :height 6))
+               (second (find-or-create-session manager
+                                               "s1"
+                                               :shell "/bin/sh"))
+               (attachment (attach-session manager
+                                            (session-id first)
+                                            :mode :command)))
+          (check (eq first second)
+                 "A repeated name creates a second session.")
+          (check (string= "s1" (session-name first))
+                 "A named session loses its name.")
+          (check (eq first (lookup-session-by-name manager "s1"))
+                 "Name lookup does not return the named session.")
+          (check (equal '("s1" . :ready)
+                        (first (session-list manager)))
+                 "The session list omits the ready named session.")
+          (set-input-draft attachment "false")
+          (check (submit-command attachment "false" :shell)
+                 "The named session rejects a shell command.")
+          (check (wait-until
+                  (lambda ()
+                    (equal '("s1" . :error)
+                           (first (session-list manager)))))
+                 "A failed command does not report error state.")
+          (set-input-draft attachment "(error \"bad\")")
+          (check (submit-command attachment "(error \"bad\")" :lisp)
+                 "The named session rejects a Lisp command.")
+          (check (wait-until
+                  (lambda ()
+                    (equal '("s1" . :error)
+                           (first (session-list manager)))))
+                 "A failed Lisp command does not report error state.")
+          (set-input-draft attachment "true")
+          (check (submit-command attachment "true" :shell)
+                 "The named session rejects its next command.")
+          (check (wait-until
+                  (lambda ()
+                    (equal '("s1" . :ready)
+                           (first (session-list manager)))))
+                 "A later command does not clear error state."))
+      (close-session-manager manager))))
+
+(deftest session-names-reject-paths ()
+  (let ((manager (make-session-manager :retention-seconds 5))
+        (raised-p nil))
+    (unwind-protect
+        (handler-case
+            (start-session manager :name "bad/name" :shell "/bin/sh")
+          (error () (setf raised-p t)))
+      (close-session-manager manager))
+    (check raised-p
+           "A session name accepts path separators.")))
+
 (deftest session-modes-reject-incompatible-attachments ()
   (let ((manager (make-session-manager :retention-seconds 5)))
     (unwind-protect

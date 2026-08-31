@@ -16,9 +16,10 @@
 (asdf:defsystem "lispore/app"
   :description "The Lispore command-line application."
   :version "0.1.0"
-  :depends-on ("lispore" "clingon")
+  :depends-on ("lispore" "clingon" "usocket")
   :serial t
   :components ((:file "app/package")
+               (:file "app/manager")
                (:file "app/main"))
   :build-operation "program-op"
   :build-pathname "bin/lispore"

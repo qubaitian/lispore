@@ -10,9 +10,15 @@
   ((sessions
     :initform (make-hash-table :test #'equal)
     :accessor manager-sessions)
+   (named-sessions
+    :initform (make-hash-table :test #'equal)
+    :accessor manager-named-sessions)
    (lock
     :initform (make-lock "lispore session manager")
     :reader manager-lock)
+   (name-lock
+    :initform (make-lock "lispore session names")
+    :reader manager-name-lock)
    (next-id
     :initform 0
     :accessor manager-next-id)
@@ -34,6 +40,10 @@
   ((id
     :initarg :id
     :reader session-id)
+   (name
+    :initarg :name
+    :initform nil
+    :reader session-name)
    (manager
     :initarg :manager
     :reader session-manager)
@@ -275,7 +285,11 @@
                 (push id expired-ids)))
             (manager-sessions manager))
     (mapc (lambda (id)
-            (remhash id (manager-sessions manager)))
+            (let ((session (gethash id (manager-sessions manager))))
+              (remhash id (manager-sessions manager))
+              (when (and session (session-name session))
+                (remhash (session-name session)
+                         (manager-named-sessions manager)))))
           expired-ids)))
 
 (defun run-session-cleaner (manager)
@@ -305,13 +319,65 @@
   "Return true when MODE names a supported frontend mode."
   (member mode '(:passthrough :command) :test #'eq))
 
+(defun valid-session-name-p (name)
+  "Return true when NAME is a simple session name."
+  (and (stringp name)
+       (plusp (length name))
+       (every (lambda (character)
+                (or (alphanumericp character)
+                    (find character "._-" :test #'char=)))
+              name)))
+
+(defun check-session-name (name)
+  "Signal an error when NAME is not a valid session name."
+  (unless (valid-session-name-p name)
+    (error "Session names use letters, digits, dots, dashes, and underscores."))
+  name)
+
+(defun lookup-session-by-name (manager name)
+  "Return the managed session named NAME while its record exists."
+  (check-type manager session-manager)
+  (check-session-name name)
+  (with-lock-held ((manager-lock manager))
+    (unless (manager-closed-p manager)
+      (purge-expired-sessions manager)
+      (gethash name (manager-named-sessions manager)))))
+
+(defun session-list-state-under-lock (session)
+  "Return SESSION's display state while SESSION is locked."
+  (cond
+    ((managed-session-terminated-p session) :closed)
+    ((and (eq (managed-execution-state session) :ready)
+          (managed-execution-error session))
+     :error)
+    (t
+     (managed-execution-state session))))
+
+(defun session-list (manager)
+  "Return named sessions as NAME and display-state conses."
+  (check-type manager session-manager)
+  (with-lock-held ((manager-lock manager))
+    (unless (manager-closed-p manager)
+      (purge-expired-sessions manager)
+      (sort
+       (loop for session being the hash-values of (manager-named-sessions manager)
+             collect
+             (with-lock-held ((session-lock session))
+               (cons (session-name session)
+                     (session-list-state-under-lock session))))
+       #'string<
+       :key #'car))))
+
 (defun start-session (manager &key
+                                name
                                 (shell (current-shell))
                                 (width 80)
                                 (height 24)
                                 (mode :command))
   "Start a fixed-size shell and return its opaque registry ID."
   (check-type manager session-manager)
+  (when name
+    (check-session-name name))
   (check-type width (integer 1))
   (check-type height (integer 1))
   (unless (valid-session-mode-p mode)
@@ -331,10 +397,15 @@
            (with-lock-held ((manager-lock manager))
              (when (manager-closed-p manager)
                (error "The shell session manager is closed."))
+             (purge-expired-sessions manager)
+             (when (and name
+                        (gethash name (manager-named-sessions manager)))
+               (error "A session named ~A already exists." name))
              (setf session-id (next-session-id manager)
                    managed-session
                    (make-instance 'managed-session
                                   :id session-id
+                                  :name name
                                   :manager manager
                                   :shell-session shell-session
                                   :terminal (make-session-terminal width height)
@@ -356,7 +427,10 @@
                      (make-thread
                       (lambda () (run-execution-worker managed-session))
                       :name (format nil "~A execution" session-id))
-                     execution-started-p t)))
+                     execution-started-p t))
+             (when name
+               (setf (gethash name (manager-named-sessions manager))
+                     managed-session)))
            (setf success-p t)
            session-id)
       (unless success-p
@@ -364,7 +438,11 @@
           (with-lock-held ((manager-lock manager))
             (when (eq managed-session
                       (gethash session-id (manager-sessions manager)))
-              (remhash session-id (manager-sessions manager))))
+              (remhash session-id (manager-sessions manager))
+              (when (and name
+                         (eq managed-session
+                             (gethash name (manager-named-sessions manager))))
+                (remhash name (manager-named-sessions manager)))))
           (with-lock-held ((session-lock managed-session))
             (setf (managed-session-running-p managed-session) nil
                   (execution-stop-p managed-session) t)
@@ -385,6 +463,25 @@
               (delete-package (managed-lisp-package managed-session)))))
         (unless managed-session
           (close-session shell-session))))))
+
+(defun find-or-create-session (manager name &key
+                                        (shell (current-shell))
+                                        (width 80)
+                                        (height 24)
+                                        (mode :command))
+  "Return NAME's session, creating it once when absent."
+  (check-type manager session-manager)
+  (check-session-name name)
+  (with-lock-held ((manager-name-lock manager))
+    (or (lookup-session-by-name manager name)
+        (lookup-session
+         manager
+         (start-session manager
+                        :name name
+                        :shell shell
+                        :width width
+                        :height height
+                        :mode mode)))))
 
 (defun session-running-p (session)
   "Return true while SESSION accepts attachments and input."
@@ -1073,19 +1170,26 @@
                   (let ((output (evaluate-lisp-command session input)))
                     (publish-session-output session output))
                   :finished)
-              (error (condition)
+              (error (caught-condition)
                 (with-lock-held ((session-lock session))
-                  (record-command-error-under-lock attachment input condition))
+                  (record-command-error-under-lock
+                   attachment
+                   input
+                   caught-condition))
                 (publish-session-output
                  session
-                 (format nil "Error: ~A~%" condition))
-                :error)))))
+                 (format nil "Error: ~A~%" caught-condition))
+                (list :error caught-condition))))))
     (when (eq result :interrupted)
       (publish-session-output
        session
-       (format nil "Execution interrupted.~%"))))
-  (with-lock-held ((session-lock session))
-    (finish-execution-under-lock session)))
+       (format nil "Execution interrupted.~%")))
+    (with-lock-held ((session-lock session))
+      (finish-execution-under-lock
+       session
+       (when (and (consp result)
+                  (eq (first result) :error))
+         (second result))))))
 
 (defun run-execution-job (session job)
   "Run one queued command JOB."
@@ -1187,5 +1291,6 @@
                (not (eq cleanup-thread (current-thread))))
       (ignore-errors (join-thread cleanup-thread)))
     (with-lock-held ((manager-lock manager))
-      (clrhash (manager-sessions manager)))
+      (clrhash (manager-sessions manager))
+      (clrhash (manager-named-sessions manager)))
     t))

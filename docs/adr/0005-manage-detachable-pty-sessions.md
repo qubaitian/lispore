@@ -11,7 +11,7 @@ Reattachment accepts only running sessions and restores their retained screen.
 
 ## Status
 
-accepted
+superseded by ADR-0006
 
 ## Consequences
 

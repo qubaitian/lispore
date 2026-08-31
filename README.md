@@ -31,8 +31,18 @@ Run the command without arguments from the repository root.
 ./bin/lispore
 ```
 
-The command ensures a session manager before creating a new session.
-It attaches the command frontend to that session.
+The command starts the background session manager when needed.
+It prints the existing named sessions and their states.
+It does not attach to a session.
+Pass a session name to create or attach to that session.
+
+```sh
+./bin/lispore s1
+```
+
+The named command creates `s1` when it does not exist.
+It reuses `s1` when it already exists.
+The manager stays alive after the command exits.
 The command provides `--help` and `--version` through Clingon.
 
 Passthrough mode forwards terminal bytes without interpretation.
@@ -77,6 +87,9 @@ The command and passthrough frontends restore terminal settings.
 
 `make-session-manager` creates an in-process session registry.
 `start-session` creates a fixed-size shell and returns an opaque ID.
+`find-or-create-session` finds or creates one named session atomically.
+`lookup-session-by-name` finds a named session.
+`session-list` returns named sessions and their display states.
 `start-session` uses the command frontend by default.
 `attach-session` creates a frontend attachment for a running session.
 `attach-session` uses the command frontend by default.
@@ -94,11 +107,14 @@ Set `:mode :passthrough` when using the passthrough frontend.
 `close-session-manager` terminates its sessions during application cleanup.
 
 The session manager retains final screens for a fixed time.
-The command keeps the manager in process memory.
+The CLI manager keeps sessions in its background process.
+The manager scope is the current user on the current machine.
+The bare command lists sessions and exits.
+The named command creates or attaches to one named session.
 Detachment does not survive command exit.
 Existing attachments keep their final screen after termination.
 Natural shell exit rejects every new attachment.
-Service restart does not preserve in-memory sessions.
+Manager restart does not preserve in-memory sessions.
 
 ## Scope
 

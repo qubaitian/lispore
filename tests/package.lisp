@@ -25,11 +25,13 @@
                 #:cursor-position
                 #:detach
                 #:execution-state
+                #:find-or-create-session
                 #:feed-terminal
                 #:interrupt-execution
                 #:input-draft
                 #:input-history
                 #:lookup-session
+                #:lookup-session-by-name
                 #:make-session-manager
                 #:run-passthrough
                 #:make-terminal-emulator
@@ -44,6 +46,9 @@
                 #:screen-cell-character
                 #:screen-cell-style
                 #:session-running-p
+                #:session-id
+                #:session-list
+                #:session-name
                 #:restore-session
                 #:reattach-session
                 #:set-input-draft

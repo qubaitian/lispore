@@ -7,10 +7,27 @@
   (:import-from #:lispore
                 #:attach-session
                 #:close-session-manager
+                #:detach
+                #:find-or-create-session
                 #:interactive-shell
                 #:make-session-manager
-                #:start-session)
+                #:session-list
+                #:session-id)
   (:import-from #:lispore.platform
-                #:terminal-size)
+                #:+pollerr+
+                #:+pollhup+
+                #:+pollin+
+                #:+pollnval+
+                #:call-with-raw-terminal
+                #:poll-fds
+                #:prevent-socket-sigpipe
+                #:read-fd
+                #:set-close-on-exec
+                #:terminal-size
+                #:write-fd)
+  (:import-from #:lispore.utf8
+                #:encode-utf8)
+  (:import-from #:bordeaux-threads
+                #:make-thread)
   (:export
    #:main))

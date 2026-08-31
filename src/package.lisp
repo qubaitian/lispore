@@ -8,8 +8,10 @@
    #:call-with-raw-terminal
    #:close-pty
    #:poll-fds
+   #:prevent-socket-sigpipe
    #:read-fd
    #:resize-pty
+   #:set-close-on-exec
    #:start-pty
    #:terminal-size
    #:terminate-process
@@ -145,7 +147,9 @@
    #:input-draft
    #:input-cursor
    #:input-history
+   #:find-or-create-session
    #:lookup-session
+   #:lookup-session-by-name
    #:make-session-manager
    #:read-attachment
    #:retained-screen
@@ -154,6 +158,8 @@
    #:session-running-p
    #:session-error
    #:session-id
+   #:session-list
+   #:session-name
    #:publish-session-output
    #:submit-command
    #:terminate-session
@@ -248,7 +254,9 @@
                 #:input-draft
                 #:input-cursor
                 #:input-history
+                #:find-or-create-session
                 #:lookup-session
+                #:lookup-session-by-name
                 #:make-session-manager
                 #:read-attachment
                 #:retained-screen
@@ -257,6 +265,8 @@
                 #:session-running-p
                 #:session-error
                 #:session-id
+                #:session-list
+                #:session-name
                 #:execution-state
                 #:set-input-draft
                 #:start-session
@@ -293,9 +303,11 @@
    #:input-draft
    #:input-cursor
    #:input-history
+   #:find-or-create-session
    #:interrupt-execution
    #:interactive-shell
    #:lookup-session
+   #:lookup-session-by-name
    #:make-terminal-emulator
    #:make-session-manager
    #:pty-master
@@ -317,6 +329,8 @@
    #:session-eof-p
    #:session-running-p
    #:session-error
+   #:session-list
+   #:session-name
    #:execution-state
    #:session-id
    #:session-open-p

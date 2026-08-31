@@ -15,16 +15,26 @@ _Avoid_: zsh
 
 **Session manager**:
 A registry that owns shell sessions and their attachments.
+It is the entry point for listing and selecting sessions.
 _Avoid_: session service, session daemon
 
 **Session ID**:
 An opaque identifier for one managed shell session.
 _Avoid_: session name, process ID
 
+**Session name**:
+A human-readable label used to select one shell session.
+_Avoid_: session ID, process ID
+
+**Session list**:
+The available session names and execution states shown by the session manager.
+_Avoid_: session picker, session menu
+
 **Execution state**:
 The status of a session's current submission.
 `ready` means no active execution; `running` means one active execution.
-`error` means the session cannot continue; `closed` means it has terminated.
+`error` means the most recent submission failed; later input remains possible.
+`closed` means the session no longer accepts input.
 _Avoid_: process state
 
 **PTY**:
