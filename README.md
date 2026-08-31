@@ -16,8 +16,7 @@ Then run `sbcl --load setup.lisp`.
 Run the test suite from the repository root.
 
 ```sh
-sbcl --noinform --non-interactive --load init \
-  --eval '(asdf:test-system "lispore")'
+sbcl --noinform --non-interactive --load init --eval '(asdf:test-system "lispore")'
 ```
 
 ## Build
