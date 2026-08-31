@@ -1,5 +1,7 @@
 # Run a session manager for named sessions
 
+This decision is superseded by ADR-0010 for manager lifecycle behavior.
+
 Lispore uses a long-lived session manager to own shell sessions across command invocations.
 The command surface described here is superseded by ADR-0008.
 The manager lifetime, scope, socket, and restart decisions remain.
@@ -20,4 +22,4 @@ Manager restart loses sessions because session state remains in memory.
 
 ## Status
 
-accepted
+superseded by ADR-0010

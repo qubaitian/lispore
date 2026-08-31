@@ -3,13 +3,40 @@
 (cl:defvar *api-lock* (make-lock "lispore api"))
 (cl:defvar *api-state* (cl:list :manager cl:nil :current-session cl:nil))
 
+(cl:defun get-api-stored-manager ()
+  "Return the process-local default Session manager."
+  (with-lock-held (*api-lock*)
+    (cl:getf *api-state* :manager)))
+
 (cl:defun get-api-manager (manager)
-  "Return MANAGER or the process-local default manager."
-  (cl:or manager
-         (with-lock-held (*api-lock*)
-           (cl:or (cl:getf *api-state* :manager)
-                  (cl:setf (cl:getf *api-state* :manager)
-                           (lispore:new-session-manager))))))
+  "Return a running MANAGER or the process-local default manager."
+  (cl:let ((selected (cl:or manager (get-api-stored-manager))))
+    (cl:or selected
+           (cl:error "The Session manager is stopped."))
+    (cl:unless (cl:eq :running
+                      (lispore:get-session-manager-state selected))
+      (cl:error "The Session manager is stopped."))
+    selected))
+
+(cl:defun get-api-manager-state (manager)
+  "Return MANAGER's state or the default manager state."
+  (cl:let ((selected (cl:or manager (get-api-stored-manager))))
+    (cl:if selected
+           (lispore:get-session-manager-state selected)
+           :stopped)))
+
+(cl:defun new-api-session-manager ()
+  "Create and store the process-local default Session manager."
+  (with-lock-held (*api-lock*)
+    (cl:let ((old-manager (cl:getf *api-state* :manager)))
+      (cl:when (cl:and old-manager
+                       (cl:eq :running
+                             (lispore:get-session-manager-state old-manager)))
+        (cl:error "The Session manager is already running."))
+      (cl:let ((manager (lispore:new-session-manager)))
+        (cl:setf (cl:getf *api-state* :manager) manager
+                 (cl:getf *api-state* :current-session) cl:nil)
+        manager))))
 
 (cl:defun get-api-current-session ()
   "Return the current Session for this API caller."
@@ -72,9 +99,19 @@
         (cl:setf (cl:getf *api-state* :current-session) cl:nil)))
     session))
 
-(cl:defun get-api-del-arguments (arguments)
-  "Return the optional deletion value and manager."
-    (cl:let ((value cl:nil)
+(cl:defun del-api-session-manager (manager)
+  "Stop MANAGER or the process-local default Session manager."
+  (cl:let ((selected (get-api-manager manager)))
+    (lispore:del-session-manager selected)
+    (with-lock-held (*api-lock*)
+      (cl:when (cl:eq selected (cl:getf *api-state* :manager))
+        (cl:setf (cl:getf *api-state* :manager) cl:nil
+                 (cl:getf *api-state* :current-session) cl:nil)))
+    selected))
+
+(cl:defun get-api-value-arguments (arguments)
+  "Return an optional value and manager from ARGUMENTS."
+  (cl:let ((value cl:nil)
            (manager cl:nil))
     (cl:when (cl:and arguments
                      (cl:not (cl:keywordp (cl:first arguments))))
@@ -86,13 +123,19 @@
       (cl:setf manager (cl:second arguments)))
     (cl:values value manager)))
 
-(cl:defun new (path value cl:&key manager)
+(cl:defun new (path cl:&rest arguments)
   "Create the value at missing PATH."
-  (cl:case path
-    (:session
-     (new-api-session (get-api-manager manager) value))
-    (cl:otherwise
-     (cl:error "NEW does not support position ~S." path))))
+  (cl:multiple-value-bind (value manager)
+      (get-api-value-arguments arguments)
+    (cl:case path
+      (:session-manager
+       (cl:when arguments
+         (cl:error "NEW SESSION-MANAGER accepts no value or manager."))
+       (new-api-session-manager))
+      (:session
+       (new-api-session (get-api-manager manager) value))
+      (cl:otherwise
+       (cl:error "NEW does not support position ~S." path)))))
 
 (cl:defun set (path value cl:&key manager)
   "Set the existing value at PATH."
@@ -107,6 +150,8 @@
 (cl:defun get (path cl:&key manager)
   "Return the existing value at PATH."
   (cl:case path
+    (:session-manager
+     (get-api-manager-state manager))
     (:session
      (lispore:get-session-list (get-api-manager manager)))
     (:debug
@@ -119,8 +164,13 @@
 (cl:defun del (path cl:&rest arguments)
   "Delete the value at PATH."
   (cl:multiple-value-bind (value manager)
-      (get-api-del-arguments arguments)
-  (cl:case path
+      (get-api-value-arguments arguments)
+    (cl:case path
+      (:session-manager
+       (cl:when (cl:and arguments
+                        (cl:not (cl:keywordp (cl:first arguments))))
+         (cl:error "DEL SESSION-MANAGER accepts no value."))
+       (del-api-session-manager manager))
       (:session
        (cl:unless value
          (cl:error "DEL SESSION requires a Session name."))

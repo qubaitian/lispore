@@ -172,6 +172,7 @@
    #:get-session
    #:get-session-by-name
    #:new-session-manager
+   #:get-session-manager-state
    #:get-manager-debug-value
    #:set-manager-debug-value
    #:get-manager-debug-enabled-p
@@ -284,6 +285,7 @@
                 #:get-session
                 #:get-session-by-name
                 #:new-session-manager
+                #:get-session-manager-state
                 #:get-manager-debug-value
                 #:set-manager-debug-value
                 #:get-manager-debug-enabled-p
@@ -341,6 +343,7 @@
    #:get-retained-screen
    #:get-session
    #:get-session-by-name
+   #:get-session-manager-state
    #:get-session-error
    #:get-session-list
    #:get-session-running-p

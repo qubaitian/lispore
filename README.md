@@ -36,6 +36,17 @@ The build writes the executable to `bin/lispore`.
 The CLI uses four data operations.
 The operation, path, and value use separate arguments.
 
+Start the Session manager before other commands.
+
+```sh
+./bin/lispore new session-manager
+./bin/lispore get session-manager
+```
+
+The manager state is `running` or `stopped`.
+The `new` operation reports an error when it already runs.
+The `del` operation stops the manager and all Sessions.
+
 ```sh
 ./bin/lispore new session s1
 ./bin/lispore set debug 1
@@ -50,6 +61,7 @@ The operation, path, and value use separate arguments.
 `get session` queries the named Session list.
 Invalid operations report errors and return a non-zero status.
 The manager stays alive after each command exits.
+The manager does not start automatically.
 
 ```sh
 ./bin/lispore get session
@@ -78,9 +90,12 @@ The command provides `--help` and `--version` through Clingon.
 The public Lisp interface lives in `lispore.api`.
 
 ```lisp
+(lispore.api:new :session-manager)
+(lispore.api:get :session-manager)
 (lispore.api:new :session "s1")
 (lispore.api:set :debug 1)
 (lispore.api:get :debug)
 (lispore.api:set :current-session "s1")
 (lispore.api:del :session "s1")
+(lispore.api:del :session-manager)
 ```

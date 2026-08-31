@@ -10,6 +10,41 @@
     (check (not (eq api-get (find-symbol "GET" "COMMON-LISP")))
            "The data interface reuses Common Lisp GET.")))
 
+(deftest api-manages-session-manager-lifecycle ()
+  (when (eq :running (lispore.api:get :session-manager))
+    (lispore.api:del :session-manager))
+  (unwind-protect
+       (progn
+         (check (eq :stopped (lispore.api:get :session-manager))
+                "GET SESSION-MANAGER does not report stopped.")
+         (let* ((manager (lispore.api:new :session-manager))
+                (session (lispore.api:new :session "api-session")))
+           (check (eq :running (lispore:get-session-manager-state manager))
+                  "NEW SESSION-MANAGER does not start the manager.")
+           (check (get-session-running-p session)
+                  "NEW SESSION does not use the running default manager.")
+           (check (eq :running (lispore.api:get :session-manager))
+                  "GET SESSION-MANAGER does not report running.")
+           (check (get-api-error-p
+                   (lambda () (lispore.api:new :session-manager)))
+                  "NEW SESSION-MANAGER accepts a duplicate.")
+           (check (eq manager (lispore.api:del :session-manager))
+                  "DEL SESSION-MANAGER returns the wrong manager.")
+           (check (not (get-session-running-p session))
+                  "DEL SESSION-MANAGER leaves a Session running.")
+           (check (eq :stopped (lispore:get-session-manager-state manager))
+                  "DEL SESSION-MANAGER does not stop the manager.")
+           (check (eq :stopped (lispore.api:get :session-manager))
+                  "GET SESSION-MANAGER does not report stopped after DEL.")
+           (check (get-api-error-p
+                   (lambda () (lispore.api:new :session "api-session")))
+                  "NEW SESSION accepts a stopped default manager.")
+           (check (get-api-error-p
+                   (lambda () (lispore.api:del :session-manager)))
+                  "DEL SESSION-MANAGER accepts a missing manager.")))
+    (when (eq :running (lispore.api:get :session-manager))
+      (lispore.api:del :session-manager))))
+
 (defun get-api-error-p (function)
   "Return true when FUNCTION signals an error."
   (handler-case

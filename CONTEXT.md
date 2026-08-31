@@ -16,7 +16,13 @@ _Avoid_: zsh
 **Session manager**:
 A registry that owns shell sessions and their attachments.
 It is the entry point for listing and selecting sessions.
+It has a `running` or `stopped` manager state.
 _Avoid_: session service, session daemon
+
+**Manager state**:
+The lifecycle state of the Session manager.
+`running` accepts requests, while `stopped` accepts none.
+_Avoid_: service status, process state
 
 **Session ID**:
 An opaque identifier for one managed shell session.
@@ -212,3 +218,9 @@ _Avoid_: immutable value
 A reserved value position that controls terminal frontend behavior.
 `current-session` accepts `set` when it enters or switches a Session.
 _Avoid_: data position
+
+**Session manager position**:
+A singleton value position that represents the current Session manager.
+`new` starts it, `get` reports its Manager state, and `del` stops it.
+`get` reports `stopped` when no manager runs.
+_Avoid_: service position

@@ -192,6 +192,14 @@
            :name "lispore session cleanup"))
     manager))
 
+(defun get-session-manager-state (manager)
+  "Return MANAGER's lifecycle state."
+  (check-type manager session-manager)
+  (with-lock-held ((manager-lock manager))
+    (if (manager-closed-p manager)
+        :stopped
+        :running)))
+
 (defun set-session-manager-logger (manager logger)
   "Install LOGGER unless MANAGER already has one."
   (check-type manager session-manager)

@@ -104,12 +104,20 @@
         do (sleep +manager-connect-delay+)
         finally (error "The lispore session manager did not start.")))
 
-(defun get-or-new-manager-connection ()
+(defun new-cli-session-manager ()
+  "Start the Session manager and print its state."
+  (when (manager-responding-p)
+    (error "The Session manager is already running."))
+  (new-manager-process)
+  (let ((socket (get-manager-ready)))
+    (unwind-protect
+         (format t "running~%")
+      (del-manager-socket socket))))
+
+(defun get-manager-connection ()
   "Return a connection to the running manager."
   (or (new-manager-connection)
-      (progn
-        (new-manager-process)
-        (get-manager-ready))))
+      (error "The Session manager is stopped. Run lispore new session-manager.")))
 
 (defun get-positive-integer (text)
   "Return positive integer TEXT, or NIL."
@@ -278,6 +286,20 @@
       (error "The Session named ~A cannot be deleted." name))
     (set-value-response fd "SESSION" name)))
 
+(defun del-session-manager-request (fd parts manager stop-function)
+  "Stop the manager requested by PARTS and close its listener."
+  (unless (protocol-command-p parts "DEL" 2)
+    (error "The manager received an invalid DEL request."))
+  (unless (string= (second parts) "SESSION-MANAGER")
+    (error "DEL cannot remove position ~A." (second parts)))
+  (unwind-protect
+       (progn
+         (del-session-manager manager)
+         (set-value-response fd "SESSION-MANAGER" "stopped"))
+    ;; Closing the listener wakes the accept loop after the response.
+    (when stop-function
+      (funcall stop-function))))
+
 (defun set-manager-error-response (fd manager line condition)
   "Log CONDITION and write its error response to FD."
   (ignore-errors
@@ -288,7 +310,7 @@
   (ignore-errors
     (set-protocol-line fd (format nil "ERROR ~A" condition))))
 
-(defun set-manager-client (socket manager)
+(defun set-manager-client (socket manager &optional stop-function)
   "Handle one manager protocol connection."
   (let ((fd (get-manager-socket-fd socket)))
     (set-socket-sigpipe fd)
@@ -337,6 +359,15 @@
                       (progn
                         (set-manager-log manager "manager-request" :message line)
                         (del-session-request fd parts manager))
+                    (error (condition)
+                      (set-manager-error-response fd manager line condition))))
+                 ((and (protocol-command-p parts "DEL" 2)
+                       (string= (second parts) "SESSION-MANAGER"))
+                  (handler-case
+                      (progn
+                        (set-manager-log manager "manager-request" :message line)
+                        (del-session-manager-request
+                         fd parts manager stop-function))
                     (error (condition)
                       (set-manager-error-response fd manager line condition))))
                  ((protocol-command-p parts "NEW" (length parts))
@@ -390,30 +421,39 @@
 
 (defun set-manager-accept-loop (listener manager)
   "Accept manager protocol connections forever."
-  (loop
-    for socket = (usocket:socket-accept listener)
-    when socket
-      do (let ((client socket))
-           (handler-case
-               (progn
-                 (set-close-on-exec (get-manager-socket-fd client))
-                 (make-thread
-                  (lambda ()
-                    (handler-case
-                        (set-manager-client client manager)
-                      (error (condition)
-                        (ignore-errors
-                          (set-manager-log manager
-                                           "manager-client-error"
-                                           :condition condition))
-                        (del-manager-socket client))))
-                  :name "lispore manager client"))
+  (let ((stopping-p nil))
+    (labels ((stop-manager ()
+               (setf stopping-p t)
+               ;; Closing the listener interrupts the blocking accept call.
+               (del-manager-socket listener)))
+      (loop
+        while (not stopping-p)
+        do (handler-case
+               (let ((client (usocket:socket-accept listener)))
+                 (when client
+                   (handler-case
+                       (progn
+                         (set-close-on-exec (get-manager-socket-fd client))
+                         (make-thread
+                          (lambda ()
+                            (handler-case
+                                (set-manager-client client manager #'stop-manager)
+                              (error (condition)
+                                (ignore-errors
+                                  (set-manager-log manager
+                                                   "manager-client-error"
+                                                   :condition condition))
+                                (del-manager-socket client))))
+                          :name "lispore manager client"))
+                     (error (condition)
+                       (ignore-errors
+                         (set-manager-log manager
+                                          "manager-client-error"
+                                          :condition condition))
+                       (del-manager-socket client)))))
              (error (condition)
-               (ignore-errors
-                 (set-manager-log manager
-                                  "manager-client-error"
-                                  :condition condition))
-               (del-manager-socket client))))))
+               (unless stopping-p
+                 (error condition))))))))
 
 (defun set-manager-server ()
   "Run the background session manager process."
@@ -458,7 +498,7 @@
 
 (defun new-cli-session (name)
   "Create NAME through the manager and print its value."
-  (let* ((socket (get-or-new-manager-connection))
+  (let* ((socket (get-manager-connection))
          (fd (get-manager-socket-fd socket)))
     (unwind-protect
          (progn
@@ -466,9 +506,16 @@
            (format t "~A~%" (get-cli-value-response socket "SESSION")))
       (del-manager-socket socket))))
 
+(defun get-cli-session-manager ()
+  "Print the Session manager state."
+  (format t "~A~%"
+          (if (manager-responding-p)
+              "running"
+              "stopped")))
+
 (defun get-cli-session-list ()
   "Print the manager's named Session list."
-  (let* ((socket (get-or-new-manager-connection))
+  (let* ((socket (get-manager-connection))
          (fd (get-manager-socket-fd socket))
          (count 0))
     (unwind-protect
@@ -499,7 +546,7 @@
 
 (defun get-cli-debug ()
   "Print the manager Debug value."
-  (let* ((socket (get-or-new-manager-connection))
+  (let* ((socket (get-manager-connection))
          (fd (get-manager-socket-fd socket)))
     (unwind-protect
          (progn
@@ -509,7 +556,7 @@
 
 (defun set-cli-debug (value)
   "Set and print the manager Debug value."
-  (let* ((socket (get-or-new-manager-connection))
+  (let* ((socket (get-manager-connection))
          (fd (get-manager-socket-fd socket)))
     (unwind-protect
          (progn
@@ -521,7 +568,7 @@
   "Enter NAME and return its manager connection."
   (multiple-value-bind (width height)
       (get-client-terminal-dimensions)
-    (let* ((socket (get-or-new-manager-connection))
+    (let* ((socket (get-manager-connection))
            (fd (get-manager-socket-fd socket)))
       (handler-case
           (progn
@@ -548,9 +595,20 @@
          (set-client-frontend socket)
       (del-manager-socket socket))))
 
+(defun del-cli-session-manager ()
+  "Stop the Session manager and print its state."
+  (let* ((socket (get-manager-connection))
+         (fd (get-manager-socket-fd socket)))
+    (unwind-protect
+         (progn
+           (set-protocol-line fd "DEL SESSION-MANAGER")
+           (format t "~A~%"
+                   (get-cli-value-response socket "SESSION-MANAGER")))
+      (del-manager-socket socket))))
+
 (defun del-cli-session (name)
   "Delete NAME through the manager and print its value."
-  (let* ((socket (get-or-new-manager-connection))
+  (let* ((socket (get-manager-connection))
          (fd (get-manager-socket-fd socket)))
     (unwind-protect
          (progn

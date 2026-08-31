@@ -22,6 +22,12 @@
       (format *error-output* "Backtrace error: ~A~%" backtrace-condition)))
   (finish-output *error-output*))
 
+(defun set-application-usage-error (operation)
+  "Signal the complete usage for an operation with two forms."
+  (error "Usage:~%  lispore ~A session-manager~%  lispore ~A session <name>"
+         operation
+         operation))
+
 (defun set-application-operation (command)
   "Apply one NEW, GET, SET, or DEL CLI operation."
   (let ((arguments (command-arguments command)))
@@ -30,15 +36,22 @@
     (let ((operation (first arguments)))
       (cond
         ((string-equal operation "NEW")
-         (unless (and (= (length arguments) 3)
-                      (string-equal (second arguments) "SESSION"))
-           (error "Usage: lispore new session <name>"))
-         (new-cli-session (third arguments)))
+         (cond
+           ((and (= (length arguments) 2)
+                 (string-equal (second arguments) "SESSION-MANAGER"))
+            (new-cli-session-manager))
+           ((and (= (length arguments) 3)
+                 (string-equal (second arguments) "SESSION"))
+            (new-cli-session (third arguments)))
+           (t
+            (set-application-usage-error "new"))))
         ((string-equal operation "GET")
          (unless (= (length arguments) 2)
-           (error "Usage: lispore get <session|debug|current-session>"))
+           (error "Usage: lispore get <session-manager|session|debug|current-session>"))
          (let ((path (second arguments)))
            (cond
+             ((string-equal path "SESSION-MANAGER")
+              (get-cli-session-manager))
              ((string-equal path "SESSION")
               (get-cli-session-list))
              ((string-equal path "DEBUG")
@@ -63,10 +76,15 @@
                 (error "Usage: lispore set current-session <name>"))
               (set-cli-current-session-frontend (third arguments))))))
         ((string-equal operation "DEL")
-         (unless (and (= (length arguments) 3)
-                      (string-equal (second arguments) "SESSION"))
-           (error "Usage: lispore del session <name>"))
-         (del-cli-session (third arguments)))
+         (cond
+           ((and (= (length arguments) 2)
+                 (string-equal (second arguments) "SESSION-MANAGER"))
+            (del-cli-session-manager))
+           ((and (= (length arguments) 3)
+                 (string-equal (second arguments) "SESSION"))
+            (del-cli-session (third arguments)))
+           (t
+            (set-application-usage-error "del"))))
         (t
          (error "Unknown CLI operation ~A." operation))))))
 
