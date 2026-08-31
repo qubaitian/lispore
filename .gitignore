@@ -28,3 +28,6 @@ skills-lock.json
 
 # Generated dependency tree.
 ocicl/
+
+#
+bin/

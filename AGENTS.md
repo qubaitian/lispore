@@ -7,6 +7,7 @@ Write for a junior reviewer.
 The code should be as easy to understand and review.
 Code comments are necessary.
 Use Conventional Commits.
+Use Conventional Branch Names.
 
 when you chat, reply, write docs, commit message:
     Use in ASD-STE100 Simplified Technical English.
