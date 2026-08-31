@@ -711,15 +711,35 @@
      condition))
   condition)
 
+(defun normalize-terminal-text (text)
+  "Convert bare line feeds to CRLF in terminal-bound TEXT."
+  ;; The terminal needs a carriage return before each line feed.
+  (with-output-to-string (stream)
+    (loop with after-return-p = nil
+          for character across text
+          do (cond
+               ((char= character #\Return)
+                (write-char character stream)
+                (setf after-return-p t))
+               ((char= character #\Newline)
+                (unless after-return-p
+                  (write-char #\Return stream))
+                (write-char character stream)
+                (setf after-return-p nil))
+               (t
+                (write-char character stream)
+                (setf after-return-p nil))))))
+
 (defun publish-session-output (session text)
   "Publish Lispore TEXT as shared UTF-8 output."
   (check-type session managed-session)
   (check-type text string)
   (when (plusp (length text))
-    (let ((bytes (encode-utf8 text)))
+    (let* ((terminal-text (normalize-terminal-text text))
+           (bytes (encode-utf8 terminal-text)))
       (with-lock-held ((session-lock session))
         (when (session-running-under-lock-p session)
-          (feed-terminal (managed-terminal session) text)
+          (feed-terminal (managed-terminal session) terminal-text)
           (broadcast-session-bytes-under-lock session bytes)))))
   text)
 

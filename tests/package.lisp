@@ -34,6 +34,7 @@
                 #:lookup-session
                 #:lookup-session-by-name
                 #:make-session-manager
+                #:publish-session-output
                 #:run-passthrough
                 #:make-terminal-emulator
                 #:read-output

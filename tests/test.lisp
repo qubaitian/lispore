@@ -128,6 +128,29 @@
                       "The command error has no backtrace.")))
         (close-session-manager manager)))))
 
+(deftest diagnostic-output-starts-each-line-at-column-zero ()
+  (let ((manager (make-session-manager :retention-seconds 5)))
+    (unwind-protect
+         (let* ((session-id (start-session manager
+                                           :shell "/bin/sh"
+                                           :mode :command
+                                           :width 40
+                                           :height 8))
+                (session (lookup-session manager session-id))
+                (attachment (attach-session manager
+                                             session-id
+                                             :mode :command))
+                (text (format nil
+                              "~%[lispore debug]~%record-begin~%timestamp=now~%record-end~%")))
+           (publish-session-output session text)
+           (let ((lines (screen-lines (attachment-screen attachment))))
+             (check (and (eql 0 (search "[lispore debug]" (second lines)))
+                         (eql 0 (search "record-begin" (third lines)))
+                         (eql 0 (search "timestamp=now" (fourth lines)))
+                         (eql 0 (search "record-end" (fifth lines))))
+                    "Diagnostic lines do not start at column zero.")))
+      (close-session-manager manager))))
+
 (defun make-test-pipe ()
   "Return readable and writable descriptors for a test pipe."
   (cffi:with-foreign-object (descriptors :int 2)
