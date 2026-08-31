@@ -3,13 +3,13 @@
 Lispore runs one interactive shell inside a macOS PTY.
 The MVP targets SBCL and CFFI.
 
-## Install
+## Requirements
 
-The project uses ocicl for dependency installation.
-
-```sh
-ocicl install
-```
+Use a Common Lisp implementation.
+Current verification uses SBCL.
+Use [OCICL](https://github.com/ocicl/ocicl) for dependencies.
+Legacy OpenSSL may need `USE_LEGACY_OPENSSL=1`.
+Then run `sbcl --load setup.lisp`.
 
 ## Build
 
@@ -76,35 +76,3 @@ The public Lisp interface lives in `lispore.api`.
 (lispore.api:set :current-session "s1")
 (lispore.api:del :session "s1")
 ```
-
-`nil` means that a position is missing.
-Missing positions accept only `new`.
-Existing positions accept only `set`, `get`, and `del`.
-
-## Terminal frontend
-
-Passthrough mode forwards terminal bytes without interpretation.
-It preserves ANSI control sequences and UTF-8 text.
-Managed frontends reserve the bottom row for a status line.
-The command frontend routes Lisp forms and shell commands.
-The status line shows the session and execution state.
-
-This example starts the passthrough frontend directly.
-
-```sh
-sbcl --noinform --load init \
-  --eval '(asdf:load-system "lispore")' \
-  --eval '(lispore:set-passthrough-frontend)'
-```
-
-The terminal frontend restores terminal settings.
-The session manager retains final screens for a fixed time.
-The CLI manager keeps Sessions in its background process.
-The manager scope is the current user on the current machine.
-Existing attachments keep their final screen after termination.
-Natural shell exit retains a closed Session until retention expires.
-Manager restart does not preserve in-memory Sessions.
-
-## Scope
-
-The MVP excludes panes, scrollback, mouse input, and windows.
