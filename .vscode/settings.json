@@ -17,6 +17,8 @@
         "--eval",
         "(require :asdf)",
         "--eval",
+        "(asdf:load-system :alive-lsp)",
+        "--eval",
         "(asdf:load-system :lispore/tests)",
         "--eval",
         "(alive/server:start)"
