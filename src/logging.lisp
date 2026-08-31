@@ -1,5 +1,9 @@
 (in-package #:lispore.logging)
 
+#+sbcl
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (require :sb-posix))
+
 (defclass diagnostic-logger ()
   ((stream
     :initarg :stream

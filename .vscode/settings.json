@@ -1,0 +1,30 @@
+{
+    "[commonlisp]": {
+        "editor.defaultFormatter": "jkillian.custom-local-formatters",
+        "editor.formatOnSave": false
+    },
+    "customLocalFormatters.formatters": [
+        {
+            "command": "tools/format-lisp.sh",
+            "languages": ["commonlisp"]
+        }
+    ],
+    "alive.lsp.startCommand": [
+        "sbcl",
+        "--noinform",
+        "--userinit",
+        "init",
+        "--eval",
+        "(require :asdf)",
+        "--eval",
+        "(asdf:load-system :alive-lsp)",
+        "--eval",
+        "(asdf:load-system :lispore)",
+        "--eval",
+        "(asdf:load-system :lispore/app)",
+        "--eval",
+        "(asdf:load-system :lispore/tests)",
+        "--eval",
+        "(alive/server:start)"
+    ]
+}

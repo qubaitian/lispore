@@ -14,7 +14,8 @@ node_modules/
 Thumbs.db
 *.swp
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
 
 # Build / coverage
 dist/
