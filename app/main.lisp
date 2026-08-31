@@ -2,12 +2,12 @@
 
 (defparameter *version* "0.1.0")
 
-(defun disable-sbcl-debugger ()
+(defun set-sbcl-debugger-disabled ()
   "Keep SBCL conditions inside Lispore's error reporting paths."
   #+sbcl
   (sb-ext:disable-debugger))
 
-(defun report-unhandled-condition (condition)
+(defun set-unhandled-condition-report (condition)
   "Print CONDITION and its backtrace to the process error stream."
   (format *error-output* "Unhandled Lispore error: ~A~%" condition)
   #+sbcl
@@ -22,49 +22,71 @@
       (format *error-output* "Backtrace error: ~A~%" backtrace-condition)))
   (finish-output *error-output*))
 
-(defun application-handler (command)
-  "List sessions, or attach to one named session."
+(defun set-application-operation (command)
+  "Apply one NEW, GET, SET, or DEL CLI operation."
   (let ((arguments (command-arguments command)))
-    (cond
-      ((null arguments)
-       (print-session-list))
-      ((null (rest arguments))
-       (run-named-session (first arguments)))
-      (t
-       (error "The lispore command accepts at most one session name.")))))
+    (unless arguments
+      (error "The CLI requires NEW, GET, SET, or DEL."))
+    (let ((operation (first arguments)))
+      (cond
+        ((string-equal operation "NEW")
+         (unless (and (= (length arguments) 3)
+                      (string-equal (second arguments) "SESSION"))
+           (error "Usage: lispore new session <name>"))
+         (new-cli-session (third arguments)))
+        ((string-equal operation "GET")
+         (unless (= (length arguments) 2)
+           (error "Usage: lispore get <session|debug|current-session>"))
+         (let ((path (second arguments)))
+           (cond
+             ((string-equal path "SESSION")
+              (get-cli-session-list))
+             ((string-equal path "DEBUG")
+              (get-cli-debug))
+             ((string-equal path "CURRENT-SESSION")
+              (error "The CLI current-session position is local to one process."))
+             (t
+              (error "GET does not support position ~A." path)))))
+        ((string-equal operation "SET")
+         (unless (and (>= (length arguments) 3)
+                      (or (string-equal (second arguments) "DEBUG")
+                          (string-equal (second arguments) "CURRENT-SESSION")))
+           (error "Usage: lispore set <debug|current-session> <value>"))
+         (let ((path (second arguments)))
+           (cond
+             ((string-equal path "DEBUG")
+              (unless (= (length arguments) 3)
+                (error "Usage: lispore set debug <0|1>"))
+              (set-cli-debug (third arguments)))
+             (t
+              (unless (= (length arguments) 3)
+                (error "Usage: lispore set current-session <name>"))
+              (set-cli-current-session-frontend (third arguments))))))
+        ((string-equal operation "DEL")
+         (unless (and (= (length arguments) 3)
+                      (string-equal (second arguments) "SESSION"))
+           (error "Usage: lispore del session <name>"))
+         (del-cli-session (third arguments)))
+        (t
+         (error "Unknown CLI operation ~A." operation))))))
 
-(defun debug-handler (command)
-  "Enable manager diagnostics, then print the current session list."
-  (when (command-arguments command)
-    (error "The debug command accepts no arguments."))
-  (let ((path (request-manager-debug)))
-    (format t "Debug logging enabled: ~A~%" (namestring path))
-    (print-session-list)))
-
-(defun make-debug-command ()
-  "Return the diagnostic logging subcommand."
-  (make-command :name "debug"
-                :description "Enable manager diagnostics."
-                :handler #'debug-handler))
-
-(defun make-application-command ()
+(defun new-application-command ()
   "Return the root command for the Lispore application."
   (make-command :name "lispore"
                 :description "Manage named shell sessions."
-                :usage "[options] [session-name]"
+                :usage "<new|get|set|del> <path> [value]"
                 :version *version*
-                :handler #'application-handler
-                :sub-commands (list (make-debug-command))))
+                :handler #'set-application-operation))
 
 (defun main ()
-  "Run the Lispore command-line application."
-  (disable-sbcl-debugger)
+  "Start the Lispore command-line application."
+  (set-sbcl-debugger-disabled)
   (handler-case
       (if (member +manager-server-argument+
                   (uiop:command-line-arguments)
                   :test #'string=)
-          (run-manager-server)
-          (run (make-application-command)))
+          (set-manager-server)
+          (run (new-application-command)))
     (error (condition)
-      (report-unhandled-condition condition)
+      (set-unhandled-condition-report condition)
       (uiop:quit 1))))

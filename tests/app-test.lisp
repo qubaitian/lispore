@@ -1,17 +1,15 @@
 (in-package #:lispore.tests)
 
 (deftest application-command-wires-clingon ()
-  (let ((command (lispore.app::make-application-command)))
+  (let ((command (lispore.app::new-application-command)))
     (check (string= "lispore" (clingon:command-name command))
            "The application command has the wrong name.")
     (check (string= "0.1.0" (clingon:command-version command))
            "The application command has the wrong version.")
     (check (functionp (clingon:command-handler command))
            "The application command has no handler.")
-    (let ((debug-command (first (clingon:command-sub-commands command))))
-      (check debug-command
-             "The application command has no debug subcommand.")
-      (check (string= "debug" (clingon:command-name debug-command))
-             "The debug subcommand has the wrong name.")
-      (check (functionp (clingon:command-handler debug-command))
-             "The debug subcommand has no handler."))))
+    (check (null (clingon:command-sub-commands command))
+           "The application command still exposes subcommands.")
+    (check (string= "<new|get|set|del> <path> [value]"
+                    (clingon:command-usage command))
+           "The application command has the wrong operation usage.")))

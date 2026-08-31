@@ -1,7 +1,7 @@
 (in-package #:lispore.input)
 
 (defstruct (input-event
-            (:constructor make-input-event (type &optional text)))
+            (:constructor new-input-event (type &optional text)))
   type
   text)
 
@@ -38,25 +38,25 @@
     :initform nil
     :accessor editor-paste-buffer)))
 
-(defun copy-history (history)
+(defun get-history-copy (history)
   "Return independent strings from newest-first HISTORY."
   (mapcar #'copy-seq history))
 
-(defun make-input-editor (&key (history nil))
+(defun new-input-editor (&key (history nil))
   "Create an input editor with HISTORY in newest-first order."
-  (make-instance 'input-editor :history (copy-history history)))
+  (make-instance 'input-editor :history (get-history-copy history)))
 
-(defun input-editor-text (editor)
+(defun get-input-editor-text (editor)
   "Return a copy of EDITOR's input draft."
   (check-type editor input-editor)
   (copy-seq (editor-text editor)))
 
-(defun input-editor-cursor (editor)
+(defun get-input-editor-cursor (editor)
   "Return EDITOR's character cursor position."
   (check-type editor input-editor)
   (editor-cursor editor))
 
-(defun input-editor-set-draft (editor text &key (cursor-at-end-p t))
+(defun set-input-editor-draft (editor text &key (cursor-at-end-p t))
   "Set EDITOR's draft and optionally place its cursor at the end."
   (check-type editor input-editor)
   (check-type text string)
@@ -68,13 +68,13 @@
         (editor-history-index editor) nil)
   editor)
 
-(defun input-editor-clear (editor)
+(defun del-input-editor (editor)
   "Clear EDITOR's draft and its history navigation state."
-  (input-editor-set-draft editor "")
+  (set-input-editor-draft editor "")
   (setf (editor-history-base-text editor) "")
   editor)
 
-(defun input-editor-clear-draft-history (editor)
+(defun del-input-editor-draft-history (editor)
   "Remove EDITOR's private recovery drafts."
   (check-type editor input-editor)
   (setf (editor-draft-history editor) nil
@@ -82,13 +82,13 @@
         (editor-history-base-text editor) "")
   editor)
 
-(defun input-editor-set-history (editor history)
+(defun set-input-editor-history (editor history)
   "Replace EDITOR's input history with newest-first HISTORY."
   (check-type editor input-editor)
-  (setf (editor-history editor) (copy-history history))
+  (setf (editor-history editor) (get-history-copy history))
   editor)
 
-(defun input-editor-record-submission (editor text)
+(defun set-input-editor-submission (editor text)
   "Retain one submitted TEXT in EDITOR's input history."
   (check-type editor input-editor)
   (check-type text string)
@@ -97,7 +97,7 @@
   (setf (editor-history-index editor) nil)
   editor)
 
-(defun input-editor-add-draft-history (editor text)
+(defun set-input-editor-draft-history (editor text)
   "Retain one unsubmitted recovery TEXT for EDITOR."
   (check-type editor input-editor)
   (check-type text string)
@@ -105,20 +105,20 @@
     (push (copy-seq text) (editor-draft-history editor)))
   editor)
 
-(defun leave-history (editor)
+(defun set-input-editor-history-live (editor)
   (setf (editor-history-index editor) nil)
   editor)
 
-(defun replace-editor-text (editor text)
+(defun set-input-editor-text (editor text)
   (setf (editor-text editor) (copy-seq text)
         (editor-cursor editor) (length text)))
 
-(defun all-history (editor)
+(defun get-input-editor-all-history (editor)
   (append (editor-draft-history editor)
           (editor-history editor)))
 
-(defun navigate-previous (editor)
-  (let ((history (all-history editor)))
+(defun set-input-editor-history-previous (editor)
+  (let ((history (get-input-editor-all-history editor)))
     (when (plusp (length history))
       (unless (editor-history-index editor)
         (setf (editor-history-base-text editor)
@@ -127,22 +127,22 @@
       (let ((next-index (1+ (editor-history-index editor))))
         (when (< next-index (length history))
           (setf (editor-history-index editor) next-index)
-          (replace-editor-text editor (nth next-index history)))))))
+          (set-input-editor-text editor (nth next-index history)))))))
 
-(defun navigate-next (editor)
+(defun set-input-editor-history-next (editor)
   (when (editor-history-index editor)
     (if (plusp (editor-history-index editor))
         (let ((next-index (1- (editor-history-index editor))))
           (setf (editor-history-index editor) next-index)
-          (replace-editor-text editor
-                               (nth next-index (all-history editor))))
+          (set-input-editor-text editor
+                               (nth next-index (get-input-editor-all-history editor))))
         (progn
-          (replace-editor-text editor (editor-history-base-text editor))
+          (set-input-editor-text editor (editor-history-base-text editor))
           (setf (editor-history-index editor) nil))))
   editor)
 
-(defun insert-character (editor character)
-  (leave-history editor)
+(defun set-input-editor-insert-character (editor character)
+  (set-input-editor-history-live editor)
   (let ((cursor (editor-cursor editor))
         (text (editor-text editor)))
     (setf (editor-text editor)
@@ -152,7 +152,7 @@
                        (subseq text cursor))
           (editor-cursor editor) (1+ cursor))))
 
-(defun normalized-input-text (text)
+(defun get-normalized-input-text (text)
   "Return TEXT with carriage returns changed to newlines."
   (with-output-to-string (stream)
     (loop for character across text
@@ -161,10 +161,10 @@
                              character)
                          stream))))
 
-(defun insert-text (editor text)
-  (let ((text (normalized-input-text text)))
+(defun set-input-editor-insert-text (editor text)
+  (let ((text (get-normalized-input-text text)))
     (unless (zerop (length text))
-      (leave-history editor)
+      (set-input-editor-history-live editor)
       (let ((cursor (editor-cursor editor))
             (old-text (editor-text editor)))
         (setf (editor-text editor)
@@ -175,9 +175,9 @@
               (editor-cursor editor) (+ cursor (length text))))))
   editor)
 
-(defun delete-before-cursor (editor)
+(defun del-input-editor-before-cursor (editor)
   (when (plusp (editor-cursor editor))
-    (leave-history editor)
+    (set-input-editor-history-live editor)
     (let ((cursor (editor-cursor editor))
           (text (editor-text editor)))
       (setf (editor-text editor)
@@ -186,9 +186,9 @@
                          (subseq text cursor))
             (editor-cursor editor) (1- cursor)))))
 
-(defun delete-at-cursor (editor)
+(defun del-input-editor-at-cursor (editor)
   (when (< (editor-cursor editor) (length (editor-text editor)))
-    (leave-history editor)
+    (set-input-editor-history-live editor)
     (let ((cursor (editor-cursor editor))
           (text (editor-text editor)))
       (setf (editor-text editor)
@@ -196,63 +196,63 @@
                          (subseq text 0 cursor)
                          (subseq text (1+ cursor)))))))
 
-(defun move-cursor (editor amount)
-  (leave-history editor)
+(defun set-input-editor-cursor (editor amount)
+  (set-input-editor-history-live editor)
   (setf (editor-cursor editor)
         (max 0 (min (length (editor-text editor))
                     (+ (editor-cursor editor) amount))))
   editor)
 
-(defun dispatch-csi (editor final)
+(defun set-input-editor-csi (editor final)
   (let ((parameters (editor-csi-buffer editor)))
     (case final
-      (#\A (navigate-previous editor))
-      (#\B (navigate-next editor))
-      (#\C (move-cursor editor 1))
-      (#\D (move-cursor editor -1))
-      (#\H (leave-history editor)
+      (#\A (set-input-editor-history-previous editor))
+      (#\B (set-input-editor-history-next editor))
+      (#\C (set-input-editor-cursor editor 1))
+      (#\D (set-input-editor-cursor editor -1))
+      (#\H (set-input-editor-history-live editor)
             (setf (editor-cursor editor) 0))
-      (#\F (leave-history editor)
+      (#\F (set-input-editor-history-live editor)
             (setf (editor-cursor editor) (length (editor-text editor))))
       (#\~
        (cond
          ((member parameters '("1" "7") :test #'string=)
-          (leave-history editor)
+          (set-input-editor-history-live editor)
           (setf (editor-cursor editor) 0))
          ((member parameters '("4" "8") :test #'string=)
-          (leave-history editor)
+          (set-input-editor-history-live editor)
           (setf (editor-cursor editor) (length (editor-text editor))))
          ((string= "3" parameters)
-          (delete-at-cursor editor))
+          (del-input-editor-at-cursor editor))
          ((string= "200" parameters)
           (setf (editor-parser-state editor) :paste
                 (editor-paste-buffer editor) nil))))))
   (setf (editor-csi-buffer editor) "")
   editor)
 
-(defun append-paste-text (editor text)
+(defun set-input-editor-paste-text (editor text)
   "Append TEXT to EDITOR's pending paste in reverse order."
   (loop for character across text
         do (push character (editor-paste-buffer editor)))
   editor)
 
-(defun finish-paste (editor)
+(defun set-input-editor-paste-finish (editor)
   "Insert EDITOR's pending paste and leave paste mode."
-  (insert-text editor
+  (set-input-editor-insert-text editor
                (coerce (nreverse (editor-paste-buffer editor)) 'string))
   (setf (editor-paste-buffer editor) nil
         (editor-parser-state editor) :ground)
   editor)
 
-(defun paste-csi-character (editor character)
+(defun set-input-editor-paste-character (editor character)
   (let ((code (char-code character)))
     (cond
       ((and (<= (char-code #\@) code) (<= code (char-code #\~)))
        (if (and (char= character #\~)
                 (string= "201" (editor-csi-buffer editor)))
-           (finish-paste editor)
+           (set-input-editor-paste-finish editor)
            (progn
-             (append-paste-text
+             (set-input-editor-paste-text
               editor
               (concatenate 'string
                            (string #\Escape)
@@ -267,7 +267,7 @@
                           (editor-csi-buffer editor)
                           (string character))))
       (t
-       (append-paste-text
+       (set-input-editor-paste-text
         editor
         (concatenate 'string
                      (string #\Escape)
@@ -277,7 +277,7 @@
        (setf (editor-parser-state editor) :paste))))
   nil)
 
-(defun process-character (editor character)
+(defun set-input-editor-character (editor character)
   ;; Keep escape parsing separate from ordinary text editing.
   (cond
     ((char= character (code-char 3))
@@ -285,14 +285,14 @@
      (setf (editor-parser-state editor) :ground
            (editor-csi-buffer editor) ""
            (editor-paste-buffer editor) nil)
-     (list (make-input-event :interrupt)))
+     (list (new-input-event :interrupt)))
     ((char= character (code-char 4))
      ;; Control-D closes only when no draft exists.
      (setf (editor-parser-state editor) :ground
            (editor-csi-buffer editor) ""
            (editor-paste-buffer editor) nil)
      (when (zerop (length (editor-text editor)))
-       (list (make-input-event :eof))))
+       (list (new-input-event :eof))))
     (t
      (case (editor-parser-state editor)
        (:ground
@@ -302,13 +302,13 @@
            nil)
           ((or (char= character #\Return)
                (char= character #\Newline))
-           (list (make-input-event :enter (input-editor-text editor))))
+           (list (new-input-event :enter (get-input-editor-text editor))))
           ((or (char= character #\Backspace)
                (= (char-code character) #x7f))
-           (delete-before-cursor editor)
+           (del-input-editor-before-cursor editor)
            nil)
           ((>= (char-code character) #x20)
-           (insert-character editor character)
+           (set-input-editor-insert-character editor character)
            nil)))
        (:escape
         (if (char= character #\[)
@@ -320,7 +320,7 @@
         (let ((code (char-code character)))
           (if (and (<= (char-code #\@) code) (<= code (char-code #\~)))
               (progn
-                (dispatch-csi editor character)
+                (set-input-editor-csi editor character)
                 (unless (eq (editor-parser-state editor) :paste)
                   (setf (editor-parser-state editor) :ground)))
               (setf (editor-csi-buffer editor)
@@ -338,16 +338,16 @@
             (setf (editor-parser-state editor) :paste-csi
                   (editor-csi-buffer editor) "")
             (progn
-              (append-paste-text editor
+              (set-input-editor-paste-text editor
                                  (concatenate 'string
                                               (string #\Escape)
                                               (string character)))
               (setf (editor-parser-state editor) :paste)))
         nil)
       (:paste-csi
-        (paste-csi-character editor character))))))
+        (set-input-editor-paste-character editor character))))))
 
-(defun input-editor-feed (editor bytes)
+(defun set-input-editor-bytes (editor bytes)
   "Consume octet BYTES and return any input events.
 
 The editor keeps incomplete UTF-8 and escape sequences between calls."
@@ -359,7 +359,7 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
         (length (length bytes)))
     (labels ((process-text (text)
                (loop for character across text
-                     do (dolist (event (process-character editor character))
+                     do (dolist (event (set-input-editor-character editor character))
                           (push event events))))
              (process-segment (start end)
                (when (< start end)
@@ -368,7 +368,7 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
                                     bytes
                                     (subseq bytes start end))))
                    (multiple-value-bind (text new-pending)
-                       (decode-utf8-chunk segment pending)
+                       (get-utf8-chunk segment pending)
                      (setf pending new-pending)
                      (process-text text))))))
       (loop for index below length
@@ -378,30 +378,30 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
                  ;; Control bytes cannot continue a UTF-8 sequence.
                  (setf pending nil
                        segment-start (1+ index))
-                 (dolist (event (process-character editor (code-char byte)))
+                 (dolist (event (set-input-editor-character editor (code-char byte)))
                    (push event events)))
       (process-segment segment-start length)
       (setf (editor-decode-pending editor) pending)
       (nreverse events))))
 
-(defun input-editor-paste (editor text)
+(defun set-input-editor-paste (editor text)
   "Insert pasted TEXT without treating newlines as submissions."
   (check-type editor input-editor)
   (check-type text string)
-  (insert-text editor text))
+  (set-input-editor-insert-text editor text))
 
-(defun input-language (text)
+(defun get-input-language (text)
   "Return the language selected by TEXT's first character."
   (if (and (plusp (length text))
            (char= (char text 0) (code-char 40)))
       :lisp
       :shell))
 
-(defun whitespace-character-p (character)
+(defun get-whitespace-character-p (character)
   "Return true when CHARACTER separates input words."
   (member character '(#\Space #\Tab #\Newline #\Return) :test #'char=))
 
-(defun read-heredoc-delimiter (line start)
+(defun get-heredoc-delimiter (line start)
   "Read a here-document delimiter from LINE at START."
   (let ((index start)
         (value nil)
@@ -426,7 +426,7 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
                ((member character '(#\' #\" #\`) :test #'char=)
                 (setf quote character)
                 (incf index))
-               ((or (whitespace-character-p character)
+               ((or (get-whitespace-character-p character)
                     (member character '(#\; #\| #\& #\< #\>)
                             :test #'char=))
                 (return))
@@ -436,7 +436,7 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
     (when (and value (null quote) (not escaped-p))
       (values (coerce (nreverse value) 'string) index))))
 
-(defun scan-heredoc-delimiters (line quote escaped-p)
+(defun get-heredoc-delimiters (line quote escaped-p)
   "Find here-document declarations in one shell source LINE."
   (let ((index 0)
         (length (length line))
@@ -471,7 +471,7 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
                ((and (char= character #\#) word-start-p)
                 (setf comment-p t
                       index length))
-               ((whitespace-character-p character)
+               ((get-whitespace-character-p character)
                 (setf word-start-p t)
                 (incf index))
                ((and (char= character #\<)
@@ -491,7 +491,7 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
                                            :test #'char=))
                         do (incf delimiter-start))
                   (multiple-value-bind (delimiter next-index)
-                      (read-heredoc-delimiter line delimiter-start)
+                      (get-heredoc-delimiter line delimiter-start)
                     (if delimiter
                         (progn
                           (push (cons delimiter strip-tabs-p) delimiters)
@@ -504,7 +504,7 @@ The editor keeps incomplete UTF-8 and escape sequences between calls."
                 (incf index))))
     (values (nreverse delimiters) quote escaped-p malformed-p)))
 
-(defun shell-heredoc-code (text)
+(defun get-shell-heredoc-code (text)
   "Return shell TEXT without here-document bodies.
 
 The first value reports whether a here-document remains unfinished."
@@ -542,12 +542,12 @@ The first value reports whether a here-document remains unfinished."
                                  (write-char #\Newline output)))
                              (multiple-value-bind
                                    (delimiters new-quote new-escaped-p malformed-p)
-                                 (scan-heredoc-delimiters
+                                 (get-heredoc-delimiters
                                   line
                                   quote
                                   escaped-p)
                                (when malformed-p
-                                 (return-from shell-heredoc-code
+                                 (return-from get-shell-heredoc-code
                                    (values t nil)))
                                (setf quote new-quote
                                      escaped-p new-escaped-p
@@ -558,7 +558,7 @@ The first value reports whether a here-document remains unfinished."
                          (setf position next-position))))))
       (values (not (null pending)) code))))
 
-(defun shell-compound-incomplete-p (tokens)
+(defun get-shell-compound-incomplete-p (tokens)
   "Return true when TOKENS leave a common shell compound open."
   (let ((stack nil))
     (dolist (entry (reverse tokens))
@@ -583,7 +583,7 @@ The first value reports whether a here-document remains unfinished."
                        '("then" "do" "else" "elif" "in")
                        :test #'string=))))))
 
-(defun shell-syntax-completeness (text)
+(defun get-shell-syntax-completeness (text)
   "Return :COMPLETE or :INCOMPLETE for shell syntax TEXT."
   (let ((quote nil)
         (escaped-p nil)
@@ -595,7 +595,7 @@ The first value reports whether a here-document remains unfinished."
         (word-start-p t)
         (command-position-p t)
         (token-command-position-p nil))
-    (labels ((finish-token ()
+    (labels ((set-token-finished ()
                (when token
                  (push (cons (coerce (nreverse token) 'string)
                              token-command-position-p)
@@ -603,13 +603,13 @@ The first value reports whether a here-document remains unfinished."
                  (setf token nil
                        token-command-position-p nil))
                (setf word-start-p t))
-             (start-token ()
+             (set-token-start ()
                (when (null token)
                  (setf token-command-position-p command-position-p))
                (setf command-position-p nil
                      word-start-p nil))
-             (append-token (character)
-               (start-token)
+             (set-token-character (character)
+               (set-token-start)
                (push character token)
                (setf trailing-operator nil)))
       ;; Track only syntax that commonly needs another input line.
@@ -622,54 +622,54 @@ The first value reports whether a here-document remains unfinished."
                           word-start-p t
                           command-position-p t)))
                  (escaped-p
-                  (append-token character)
+                  (set-token-character character)
                   (setf escaped-p nil))
                  (quote
                   (case quote
                     (:single
                      (if (char= character #\')
                          (setf quote nil)
-                         (append-token character)))
+                         (set-token-character character)))
                     (:double
                      (cond
                        ((char= character #\") (setf quote nil))
                        ((char= character #\\) (setf escaped-p t))
-                       (t (append-token character))))
+                       (t (set-token-character character))))
                     (:backtick
                      (if (char= character #\`)
                          (setf quote nil)
-                         (append-token character)))))
+                         (set-token-character character)))))
                  ((char= character #\\)
-                  (start-token)
+                  (set-token-start)
                   (setf escaped-p t
                         trailing-operator nil))
                  ((char= character #\')
-                  (start-token)
+                  (set-token-start)
                   (setf quote :single
                         trailing-operator nil))
                  ((char= character #\")
-                  (start-token)
+                  (set-token-start)
                   (setf quote :double
                         trailing-operator nil))
                  ((char= character #\`)
-                  (start-token)
+                  (set-token-start)
                   (setf quote :backtick
                         trailing-operator nil))
                  ((and (char= character #\#) word-start-p)
                   (setf comment-p t))
-                 ((whitespace-character-p character)
-                  (finish-token)
+                 ((get-whitespace-character-p character)
+                  (set-token-finished)
                   (setf word-start-p t)
                   (when (or (char= character #\Newline)
                             (char= character #\Return))
                     (setf command-position-p t)))
                  ((member character '(#\( #\{) :test #'char=)
-                  (finish-token)
+                  (set-token-finished)
                   (push character delimiter-stack)
                   (setf command-position-p t
                         trailing-operator nil))
                  ((member character '(#\) #\}) :test #'char=)
-                  (finish-token)
+                  (set-token-finished)
                   (when (and delimiter-stack
                              (char= character
                                     (case (first delimiter-stack)
@@ -679,46 +679,46 @@ The first value reports whether a here-document remains unfinished."
                     (pop delimiter-stack))
                   (setf trailing-operator nil))
                  ((char= character #\;)
-                  (finish-token)
+                  (set-token-finished)
                   (setf command-position-p t
                         trailing-operator nil))
                  ((char= character #\|)
-                  (finish-token)
+                  (set-token-finished)
                   (setf command-position-p t
                         trailing-operator
                         (if (string= trailing-operator "|")
                             "||"
                             "|")))
                  ((char= character #\&)
-                  (finish-token)
+                  (set-token-finished)
                   (setf command-position-p t
                         trailing-operator
                         (cond
                           ((string= trailing-operator "|") "|&")
                           ((string= trailing-operator "&") "&&")
                           (t "&"))))
-                 (t (append-token character))))
-      (finish-token))
+                 (t (set-token-character character))))
+      (set-token-finished))
     (if (or quote
             escaped-p
             delimiter-stack
             (member trailing-operator '("|" "||" "&&" "|&")
                     :test #'string=)
-            (shell-compound-incomplete-p tokens))
+            (get-shell-compound-incomplete-p tokens))
         :incomplete
         :complete)))
 
-(defun shell-input-completeness (text)
+(defun get-shell-input-completeness (text)
   "Return :COMPLETE or :INCOMPLETE for shell TEXT."
   (multiple-value-bind (heredoc-incomplete-p shell-text)
-      (shell-heredoc-code text)
+      (get-shell-heredoc-code text)
     (if heredoc-incomplete-p
         :incomplete
-        (shell-syntax-completeness shell-text))))
+        (get-shell-syntax-completeness shell-text))))
 
 (defparameter +input-reader-eof+ (gensym "INPUT-READER-EOF"))
 
-(defun lisp-input-completeness (text)
+(defun get-lisp-input-completeness (text)
   "Return the completeness of one Lispore Lisp candidate."
   (handler-case
       (let ((*read-eval* nil))
@@ -726,16 +726,16 @@ The first value reports whether a here-document remains unfinished."
             (read-from-string text nil +input-reader-eof+)
           (cond
             ((eq form +input-reader-eof+) :incomplete)
-            ((every #'whitespace-character-p
+            ((every #'get-whitespace-character-p
                     (subseq text position))
              :complete)
-            (t (shell-input-completeness text)))))
+            (t (get-shell-input-completeness text)))))
     (end-of-file () :incomplete)
     (error () :error)))
 
-(defun input-completeness (text)
+(defun get-input-completeness (text)
   "Return :COMPLETE, :INCOMPLETE, or :ERROR for input TEXT."
   (check-type text string)
-  (if (eq :lisp (input-language text))
-      (lisp-input-completeness text)
-      (shell-input-completeness text)))
+  (if (eq :lisp (get-input-language text))
+      (get-lisp-input-completeness text)
+      (get-shell-input-completeness text)))

@@ -16,9 +16,6 @@
    (lock
     :initform (make-lock "lispore session manager")
     :reader manager-lock)
-   (name-lock
-    :initform (make-lock "lispore session names")
-    :reader manager-name-lock)
    (next-id
     :initform 0
     :accessor manager-next-id)
@@ -34,6 +31,9 @@
    (logger
     :initform nil
     :accessor manager-logger)
+   (state
+    :initform (list :debug 0)
+    :accessor manager-state)
    (closed-p
     :initform nil
     :accessor manager-closed-p))
@@ -177,7 +177,7 @@
     :reader attachment-input-editor))
   (:documentation "Connect one terminal frontend to a managed session."))
 
-(defun make-session-manager (&key
+(defun new-session-manager (&key
                                (retention-seconds +default-retention-seconds+)
                                (max-buffer-bytes +default-buffer-bytes+))
   "Create an in-process registry for managed shell sessions."
@@ -188,31 +188,62 @@
                                 :max-buffer-bytes max-buffer-bytes)))
     (setf (manager-cleanup-thread manager)
           (make-thread
-           (lambda () (run-session-cleaner manager))
+           (lambda () (set-session-cleaner manager))
            :name "lispore session cleanup"))
     manager))
 
-(defun install-session-manager-logger (manager logger)
+(defun set-session-manager-logger (manager logger)
   "Install LOGGER unless MANAGER already has one."
   (check-type manager session-manager)
   (check-type logger lispore.logging:diagnostic-logger)
   (with-lock-held ((manager-lock manager))
     (unless (manager-closed-p manager)
       (or (manager-logger manager)
-          (setf (manager-logger manager) logger)))))
+          (progn
+            (setf (manager-logger manager) logger
+                  (getf (manager-state manager) :debug) 1)
+            logger)))))
 
-(defun manager-debug-enabled-p (manager)
-  "Return true when MANAGER writes diagnostic records."
+(defun del-session-manager-logger (manager)
+  "Remove MANAGER's diagnostic logger."
+  (check-type manager session-manager)
+  (let ((logger nil))
+    (with-lock-held ((manager-lock manager))
+      (setf logger (manager-logger manager)
+            (manager-logger manager) nil
+            (getf (manager-state manager) :debug) 0))
+    (when logger
+      (del-diagnostic-logger logger))
+    t))
+
+(defun get-manager-debug-value (manager)
+  "Return MANAGER's debug value."
   (check-type manager session-manager)
   (with-lock-held ((manager-lock manager))
-    (not (null (manager-logger manager)))))
+    (getf (manager-state manager) :debug)))
 
-(defun manager-log (manager event &key session-name session-id message input condition)
+(defun set-manager-debug-value (manager value)
+  "Set MANAGER's debug value to zero or one."
+  (check-type manager session-manager)
+  (unless (member value '(0 1) :test #'eql)
+    (error "Debug value must be 0 or 1."))
+  (with-lock-held ((manager-lock manager))
+    (when (manager-closed-p manager)
+      (error "The shell session manager is closed."))
+    (setf (getf (manager-state manager) :debug) value))
+  value)
+
+(defun get-manager-debug-enabled-p (manager)
+  "Return true when MANAGER writes diagnostic records."
+  (check-type manager session-manager)
+  (plusp (get-manager-debug-value manager)))
+
+(defun set-manager-log (manager event &key session-name session-id message input condition)
   "Write EVENT when MANAGER has diagnostic logging enabled."
   (check-type manager session-manager)
   (let ((logger (manager-logger manager)))
     (when logger
-      (log-diagnostic-event logger
+      (set-diagnostic-event logger
                             event
                             :session-name session-name
                             :session-id session-id
@@ -220,10 +251,10 @@
                             :input input
                             :condition condition))))
 
-(defun session-log (session event &key message input condition)
+(defun set-session-log (session event &key message input condition)
   "Write EVENT with SESSION context without affecting session work."
   (ignore-errors
-    (manager-log (session-manager session)
+    (set-manager-log (session-manager session)
                  event
                  :session-name (session-name session)
                  :session-id (session-id session)
@@ -231,7 +262,7 @@
                  :input input
                  :condition condition)))
 
-(defun current-shell ()
+(defun get-current-shell ()
   "Return the shell selected by the environment."
   (or (uiop:getenv "SHELL") "/bin/sh"))
 
@@ -239,21 +270,21 @@
   "Return the PTY rows below the frontend status line."
   (max 1 (1- height)))
 
-(defun make-session-terminal (width height)
+(defun new-session-terminal (width height)
   "Create a session terminal with a reserved status row."
-  (let ((terminal (make-terminal-emulator
+  (let ((terminal (new-terminal-emulator
                    :width width
                    :height height
                    :content-height (shell-height height))))
-    (set-status-line terminal *default-status-line-text*)
+    (set-terminal-status-line terminal *default-status-line-text*)
     terminal))
 
-(defun next-session-id (manager)
+(defun get-next-session-id (manager)
   "Return the next opaque identifier for MANAGER."
   (format nil "session-~D"
           (incf (manager-next-id manager))))
 
-(defun next-lisp-package-name ()
+(defun get-next-lisp-package-name ()
   "Return a process-unique package name for one command session."
   (symbol-name (gensym "LISPORE-USER-")))
 
@@ -267,16 +298,16 @@
         count 1
         do (setf start (1+ position))))
 
-(defun prepare-command-shell (shell-session)
+(defun set-command-shell (shell-session)
   "Hide the interactive shell prompt and input echo for the command frontend."
-  (write-input
+  (set-shell-input
    shell-session
    (format nil
            "stty -echo; PS1=''; PS2=''; export PS1 PS2; command printf '~A\\n'~%"
            +command-shell-ready-marker+))
   (loop with output = ""
         do (multiple-value-bind (bytes eof-p)
-               (read-output-bytes shell-session :wait-p t)
+               (get-shell-output-bytes shell-session :wait-p t)
              (when eof-p
                (error "The command shell closed during initialization."))
              (when (and bytes (plusp (length bytes)))
@@ -299,31 +330,31 @@
                                 2))
                    (return t)))))))
 
-(defun session-running-under-lock-p (session)
+(defun get-session-running-under-lock-p (session)
   "Return true when SESSION accepts new work."
   (and (managed-session-running-p session)
        (not (managed-session-terminated-p session))))
 
-(defun session-expired-p (session now)
+(defun get-session-expired-p (session now)
   "Return true when SESSION's retained display has expired."
   (with-lock-held ((session-lock session))
     (and (managed-session-terminated-p session)
          (session-retention-deadline session)
          (>= now (session-retention-deadline session)))))
 
-(defun session-screen-available-under-lock-p (session)
+(defun get-session-screen-available-under-lock-p (session)
   "Return true while SESSION's display remains retained."
   (not (and (managed-session-terminated-p session)
             (session-retention-deadline session)
             (>= (get-internal-real-time)
                 (session-retention-deadline session)))))
 
-(defun purge-expired-sessions (manager)
+(defun del-expired-sessions (manager)
   "Remove terminated sessions past their retention deadline."
   (let ((now (get-internal-real-time))
         (expired-ids nil))
     (maphash (lambda (id session)
-              (when (session-expired-p session now)
+              (when (get-session-expired-p session now)
                 (push id expired-ids)))
             (manager-sessions manager))
     (mapc (lambda (id)
@@ -334,34 +365,34 @@
                          (manager-named-sessions manager)))))
           expired-ids)))
 
-(defun run-session-cleaner (manager)
+(defun set-session-cleaner (manager)
   "Remove expired sessions while MANAGER remains open."
   (loop
     (sleep +session-cleanup-interval+)
     (with-lock-held ((manager-lock manager))
       (when (manager-closed-p manager)
         (return))
-      (purge-expired-sessions manager))))
+      (del-expired-sessions manager))))
 
-(defun close-managed-shell-session (session)
+(defun del-managed-shell-session (session)
   "Close SESSION after its PTY reads and writes finish."
   (with-lock-held ((session-read-lock session))
     (with-lock-held ((session-write-lock session))
-      (ignore-errors (close-session (managed-shell-session session))))))
+      (ignore-errors (del-shell-session (managed-shell-session session))))))
 
-(defun lookup-session (manager session-id)
+(defun get-session (manager session-id)
   "Return SESSION-ID's managed session while its retained record exists."
   (check-type manager session-manager)
   (with-lock-held ((manager-lock manager))
     (unless (manager-closed-p manager)
-      (purge-expired-sessions manager)
+      (del-expired-sessions manager)
       (gethash session-id (manager-sessions manager)))))
 
-(defun valid-session-mode-p (mode)
+(defun get-valid-session-mode-p (mode)
   "Return true when MODE names a supported frontend mode."
   (member mode '(:passthrough :command) :test #'eq))
 
-(defun valid-session-name-p (name)
+(defun get-valid-session-name-p (name)
   "Return true when NAME is a simple session name."
   (and (stringp name)
        (plusp (length name))
@@ -370,22 +401,22 @@
                     (find character "._-" :test #'char=)))
               name)))
 
-(defun check-session-name (name)
+(defun get-checked-session-name (name)
   "Signal an error when NAME is not a valid session name."
-  (unless (valid-session-name-p name)
+  (unless (get-valid-session-name-p name)
     (error "Session names use letters, digits, dots, dashes, and underscores."))
   name)
 
-(defun lookup-session-by-name (manager name)
+(defun get-session-by-name (manager name)
   "Return the managed session named NAME while its record exists."
   (check-type manager session-manager)
-  (check-session-name name)
+  (get-checked-session-name name)
   (with-lock-held ((manager-lock manager))
     (unless (manager-closed-p manager)
-      (purge-expired-sessions manager)
+      (del-expired-sessions manager)
       (gethash name (manager-named-sessions manager)))))
 
-(defun session-list-state-under-lock (session)
+(defun get-session-list-state-under-lock (session)
   "Return SESSION's display state while SESSION is locked."
   (cond
     ((managed-session-terminated-p session) :closed)
@@ -395,36 +426,36 @@
     (t
      (managed-execution-state session))))
 
-(defun session-list (manager)
+(defun get-session-list (manager)
   "Return named sessions as NAME and display-state conses."
   (check-type manager session-manager)
   (with-lock-held ((manager-lock manager))
     (unless (manager-closed-p manager)
-      (purge-expired-sessions manager)
+      (del-expired-sessions manager)
       (sort
        (loop for session being the hash-values of (manager-named-sessions manager)
              collect
              (with-lock-held ((session-lock session))
                (cons (session-name session)
-                     (session-list-state-under-lock session))))
+                     (get-session-list-state-under-lock session))))
        #'string<
        :key #'car))))
 
-(defun start-session (manager &key
+(defun new-session (manager &key
                                 name
-                                (shell (current-shell))
+                                (shell (get-current-shell))
                                 (width 80)
                                 (height 24)
                                 (mode :command))
   "Start a fixed-size shell and return its opaque registry ID."
   (check-type manager session-manager)
   (when name
-    (check-session-name name))
+    (get-checked-session-name name))
   (check-type width (integer 1))
   (check-type height (integer 1))
-  (unless (valid-session-mode-p mode)
+  (unless (get-valid-session-mode-p mode)
     (error "Session mode must be :PASSTHROUGH or :COMMAND."))
-  (let* ((shell-session (start-shell :shell shell
+  (let* ((shell-session (new-shell-session :shell shell
                                      :width width
                                      :height (shell-height height)))
          (managed-session nil)
@@ -435,46 +466,46 @@
     (unwind-protect
          (progn
            (when (eq mode :command)
-             (prepare-command-shell shell-session))
+             (set-command-shell shell-session))
            (with-lock-held ((manager-lock manager))
              (when (manager-closed-p manager)
                (error "The shell session manager is closed."))
-             (purge-expired-sessions manager)
+             (del-expired-sessions manager)
              (when (and name
                         (gethash name (manager-named-sessions manager)))
                (error "A session named ~A already exists." name))
-             (setf session-id (next-session-id manager)
+             (setf session-id (get-next-session-id manager)
                    managed-session
                    (make-instance 'managed-session
                                   :id session-id
                                   :name name
                                   :manager manager
                                   :shell-session shell-session
-                                  :terminal (make-session-terminal width height)
+                                  :terminal (new-session-terminal width height)
                                   :command-mode-p (eq mode :command)
                                   :lisp-package
                                   (when (eq mode :command)
                                     (make-package
-                                     (next-lisp-package-name)
+                                     (get-next-lisp-package-name)
                                      :use '(:cl))))
                    (gethash session-id (manager-sessions manager))
                    managed-session)
              (setf (session-reader-thread managed-session)
                    (make-thread
-                    (lambda () (run-session-reader managed-session))
+                    (lambda () (set-session-reader managed-session))
                     :name session-id)
                    reader-started-p t)
              (when (eq mode :command)
                (setf (execution-thread managed-session)
                      (make-thread
-                      (lambda () (run-execution-worker managed-session))
+                      (lambda () (set-execution-worker managed-session))
                       :name (format nil "~A execution" session-id))
                      execution-started-p t))
              (when name
                (setf (gethash name (manager-named-sessions manager))
                      managed-session)))
            (setf success-p t)
-           (session-log managed-session
+           (set-session-log managed-session
                         "session-start"
                         :message (format nil "mode=~A shell=~A"
                                          mode
@@ -494,7 +525,7 @@
             (setf (managed-session-running-p managed-session) nil
                   (execution-stop-p managed-session) t)
             (condition-notify (execution-condition managed-session)))
-          (close-managed-shell-session managed-session)
+          (del-managed-shell-session managed-session)
           (when (and reader-started-p
                      (not (eq (session-reader-thread managed-session)
                               (current-thread))))
@@ -509,121 +540,91 @@
             (ignore-errors
               (delete-package (managed-lisp-package managed-session)))))
         (unless managed-session
-          (close-session shell-session))))))
+          (del-shell-session shell-session))))))
 
-(defun find-or-create-session (manager name &key
-                                        (shell (current-shell))
-                                        (width 80)
-                                        (height 24)
-                                        (mode :command))
-  "Return NAME's session, creating it once when absent."
-  (check-type manager session-manager)
-  (check-session-name name)
-  (with-lock-held ((manager-name-lock manager))
-    (or (lookup-session-by-name manager name)
-        (lookup-session
-         manager
-         (start-session manager
-                        :name name
-                        :shell shell
-                        :width width
-                        :height height
-                        :mode mode)))))
-
-(defun session-running-p (session)
+(defun get-session-running-p (session)
   "Return true while SESSION accepts attachments and input."
   (check-type session managed-session)
   (with-lock-held ((session-lock session))
-    (session-running-under-lock-p session)))
+    (get-session-running-under-lock-p session)))
 
-(defun session-error (session)
+(defun get-session-error (session)
   "Return SESSION's reader error, if one occurred."
   (check-type session managed-session)
   (with-lock-held ((session-lock session))
     (managed-session-error session)))
 
-(defun retained-screen (session)
+(defun get-retained-screen (session)
   "Return a copy of SESSION's retained terminal screen."
   (check-type session managed-session)
   (with-lock-held ((session-lock session))
-    (when (session-screen-available-under-lock-p session)
-      (copy-terminal (managed-terminal session)))))
+    (when (get-session-screen-available-under-lock-p session)
+      (get-terminal-copy (managed-terminal session)))))
 
-(defun attachment-start-screen (attachment)
+(defun get-attachment-start-screen (attachment)
   "Return the screen snapshot captured when ATTACHMENT started."
   (check-type attachment attachment)
   (let ((session (attachment-session attachment)))
     (with-lock-held ((session-lock session))
-      (when (session-screen-available-under-lock-p session)
-        (copy-terminal (stored-attachment-start-screen attachment))))))
+      (when (get-session-screen-available-under-lock-p session)
+        (get-terminal-copy (stored-attachment-start-screen attachment))))))
 
-(defun attachment-attached-p (attachment)
+(defun get-attachment-attached-p (attachment)
   "Return true while ATTACHMENT remains connected."
   (check-type attachment attachment)
   (let ((session (attachment-session attachment)))
     (with-lock-held ((session-lock session))
       (managed-attachment-attached-p attachment))))
 
-(defun attachment-screen (attachment)
+(defun get-attachment-screen (attachment)
   "Return a copy of ATTACHMENT's current terminal screen."
   (check-type attachment attachment)
   (let ((session (attachment-session attachment)))
     (with-lock-held ((session-lock session))
-      (when (session-screen-available-under-lock-p session)
+      (when (get-session-screen-available-under-lock-p session)
         (if (attachment-final-screen attachment)
-            (copy-terminal (attachment-final-screen attachment))
-            (copy-terminal (managed-terminal session)))))))
+            (get-terminal-copy (attachment-final-screen attachment))
+            (get-terminal-copy (managed-terminal session)))))))
 
-(defun attach-session (manager session-id &key (mode :command))
+(defun set-current-session (manager session-id &key (mode :command))
   "Attach a frontend to a running session and return its attachment."
   (check-type manager session-manager)
-  (unless (valid-session-mode-p mode)
+  (unless (get-valid-session-mode-p mode)
     (error "Attachment mode must be :PASSTHROUGH or :COMMAND."))
-  (let ((session (lookup-session manager session-id)))
+  (let ((session (get-session manager session-id)))
     (when session
       (multiple-value-bind (attachment screen)
           (with-lock-held ((session-lock session))
             (unless (eq (eq mode :command)
                         (command-mode-p session))
               (error "Attachment mode does not match the session mode."))
-            (when (session-running-under-lock-p session)
-              (let* ((start-screen (copy-terminal (managed-terminal session)))
+            (when (get-session-running-under-lock-p session)
+              (let* ((start-screen (get-terminal-copy (managed-terminal session)))
                      (attachment
                        (make-instance 'attachment
                                       :session session
                                       :start-screen start-screen
                                       :mode mode
                                       :input-editor
-                                      (make-input-editor
+                                      (new-input-editor
                                        :history (session-input-history session))
                                       :max-buffer-bytes
                                       (manager-max-buffer-bytes manager))))
                 (push attachment (session-attachments session))
-                (values attachment (copy-terminal start-screen)))))
+                (values attachment (get-terminal-copy start-screen)))))
         (when attachment
-          (session-log session
+          (set-session-log session
                        "session-attach"
                        :message (format nil "mode=~A" mode)))
         (values attachment screen)))))
 
-(defun restore-session (manager session-id &key (mode :command))
-  "Reattach to a running session and return its retained screen."
-  (multiple-value-bind (attachment screen)
-      (attach-session manager session-id :mode mode)
-    (when attachment
-      (values attachment screen))))
-
-(defun reattach-session (manager session-id &key (mode :command))
-  "Reattach to a running session using the canonical lifecycle term."
-  (restore-session manager session-id :mode mode))
-
-(defun remove-attachment (attachment)
+(defun del-attachment (attachment)
   "Remove ATTACHMENT from its session registry."
   (let ((session (attachment-session attachment)))
     (setf (session-attachments session)
           (delete attachment (session-attachments session) :test #'eq))))
 
-(defun detach (attachment)
+(defun del-current-session (attachment)
   "Remove ATTACHMENT without closing its shell session."
   (check-type attachment attachment)
   (let ((session (attachment-session attachment)))
@@ -633,22 +634,22 @@
           (setf (managed-attachment-attached-p attachment) nil
                 (attachment-buffer attachment) nil
                 (attachment-buffer-bytes attachment) 0)
-          (input-editor-clear-draft-history (attachment-input-editor attachment))
-          (remove-attachment attachment)
+          (del-input-editor-draft-history (attachment-input-editor attachment))
+          (del-attachment attachment)
           (condition-notify (attachment-condition attachment))
           (setf detached-p t)))
       (when detached-p
-        (session-log session "session-detach"))
+        (set-session-log session "session-detach"))
       detached-p)))
 
-(defun append-attachment-output (attachment bytes)
+(defun set-attachment-output (attachment bytes)
   "Queue BYTES, or disconnect ATTACHMENT after overflow."
   (let ((new-size (+ (attachment-buffer-bytes attachment)
                      (length bytes))))
     (cond
       ((> new-size (attachment-max-buffer-bytes attachment))
        ;; A slow frontend leaves the registry after its buffer overflows.
-       (input-editor-clear-draft-history (attachment-input-editor attachment))
+       (del-input-editor-draft-history (attachment-input-editor attachment))
        (setf (managed-attachment-attached-p attachment) nil
              (attachment-buffer attachment) nil
              (attachment-buffer-bytes attachment) 0)
@@ -662,14 +663,14 @@
        (condition-notify (attachment-condition attachment))
        t))))
 
-(defun broadcast-session-bytes-under-lock (session bytes)
+(defun set-session-output-under-lock (session bytes)
   "Broadcast BYTES to every attachment while SESSION is locked."
   (when (and bytes (plusp (length bytes)))
     (dolist (attachment (copy-list (session-attachments session)))
-      (unless (append-attachment-output attachment bytes)
-        (remove-attachment attachment)))))
+      (unless (set-attachment-output attachment bytes)
+        (del-attachment attachment)))))
 
-(defun finish-execution-under-lock (session &optional condition)
+(defun set-execution-finished-under-lock (session &optional condition)
   "Return SESSION to ready state after one command finishes."
   (setf (managed-execution-state session)
         (if (managed-session-terminated-p session) :closed :ready)
@@ -684,34 +685,34 @@
         (execution-input session) nil)
   (condition-notify (execution-condition session)))
 
-(defun record-command-error-under-lock (attachment input condition)
+(defun set-command-error-under-lock (attachment input condition)
   "Retain INPUT as ATTACHMENT's recovery draft after CONDITION."
   (when (managed-attachment-attached-p attachment)
     (let ((editor (attachment-input-editor attachment)))
-      (input-editor-add-draft-history editor input)
-      (when (zerop (length (input-editor-text editor)))
-        (input-editor-set-draft editor input))))
+      (set-input-editor-draft-history editor input)
+      (when (zerop (length (get-input-editor-text editor)))
+        (set-input-editor-draft editor input))))
   condition)
 
-(defun shell-status-condition (status)
+(defun get-shell-status-condition (status)
   "Return a condition for nonzero shell STATUS."
   (unless (zerop status)
     (make-condition 'simple-error
                     :format-control "Shell command exited with status ~D."
                     :format-arguments (list status))))
 
-(defun record-current-execution-error-under-lock (session condition)
+(defun set-current-execution-error-under-lock (session condition)
   "Retain the current command after a shell execution error."
   (when (and condition
              (execution-attachment session)
              (managed-attachment-attached-p (execution-attachment session)))
-    (record-command-error-under-lock
+    (set-command-error-under-lock
      (execution-attachment session)
      (execution-input session)
      condition))
   condition)
 
-(defun normalize-terminal-text (text)
+(defun get-normalized-terminal-text (text)
   "Convert bare line feeds to CRLF in terminal-bound TEXT."
   ;; The terminal needs a carriage return before each line feed.
   (with-output-to-string (stream)
@@ -730,20 +731,20 @@
                 (write-char character stream)
                 (setf after-return-p nil))))))
 
-(defun publish-session-output (session text)
+(defun set-session-published-output (session text)
   "Publish Lispore TEXT as shared UTF-8 output."
   (check-type session managed-session)
   (check-type text string)
   (when (plusp (length text))
-    (let* ((terminal-text (normalize-terminal-text text))
-           (bytes (encode-utf8 terminal-text)))
+    (let* ((terminal-text (get-normalized-terminal-text text))
+           (bytes (get-utf8 terminal-text)))
       (with-lock-held ((session-lock session))
-        (when (session-running-under-lock-p session)
-          (feed-terminal (managed-terminal session) terminal-text)
-          (broadcast-session-bytes-under-lock session bytes)))))
+        (when (get-session-running-under-lock-p session)
+          (set-terminal-input (managed-terminal session) terminal-text)
+          (set-session-output-under-lock session bytes)))))
   text)
 
-(defun find-shell-marker (marker buffer)
+(defun get-shell-marker (marker buffer)
   "Find the first marker with a valid or incomplete status line."
   (loop with start = 0
         for position = (search marker buffer :start2 start)
@@ -773,7 +774,7 @@
                    (setf start (1+ position)))))
         finally (return nil)))
 
-(defun visible-shell-text-under-lock (session text)
+(defun get-visible-shell-text-under-lock (session text)
   "Remove the worker marker from shell TEXT and finish its execution."
   (let ((marker (execution-marker session)))
     (if (null marker)
@@ -781,7 +782,7 @@
         (let* ((buffer (concatenate 'string
                                     (execution-marker-buffer session)
                                     text))
-               (position (find-shell-marker marker buffer)))
+               (position (get-shell-marker marker buffer)))
           (cond
             ((null position)
              (let* ((keep (min (length marker) (length buffer)))
@@ -816,7 +817,7 @@
                                 (error () nil))))
                           (condition
                             (if status
-                                (shell-status-condition status)
+                                (get-shell-status-condition status)
                                 (make-condition
                                  'simple-error
                                  :format-control
@@ -829,10 +830,10 @@
                                               '(#\Return #\Newline)
                                               :test #'char=))
                            do (incf after-end))
-                     (record-current-execution-error-under-lock
+                     (set-current-execution-error-under-lock
                       session
                       condition)
-                     (finish-execution-under-lock session condition)
+                     (set-execution-finished-under-lock session condition)
                      ;; Remove only the marker and its status line.
                      (values
                       (concatenate 'string
@@ -841,26 +842,26 @@
                                    (subseq buffer after-end))
                       t))))))))))
 
-(defun record-session-output (session bytes)
+(defun set-session-pty-output (session bytes)
   "Update SESSION's screen and broadcast BYTES to attachments."
   (with-lock-held ((session-lock session))
-    (when (session-running-under-lock-p session)
+    (when (get-session-running-under-lock-p session)
       (multiple-value-bind (text pending)
-          (decode-utf8-chunk bytes (session-pending-bytes session))
+          (get-utf8-chunk bytes (session-pending-bytes session))
         (setf (session-pending-bytes session) pending)
         (let ((marker-active-p (not (null (execution-marker session)))))
           (multiple-value-bind (visible-text filtered-p)
-              (visible-shell-text-under-lock session text)
+              (get-visible-shell-text-under-lock session text)
             (declare (ignore filtered-p))
             (when (plusp (length visible-text))
-              (feed-terminal (managed-terminal session) visible-text))
-            (broadcast-session-bytes-under-lock
+              (set-terminal-input (managed-terminal session) visible-text))
+            (set-session-output-under-lock
              session
              (if marker-active-p
-                 (encode-utf8 visible-text)
+                 (get-utf8 visible-text)
                  bytes))))))))
 
-(defun mark-session-terminated (session &optional condition)
+(defun set-session-terminated (session &optional condition)
   "Mark SESSION terminated and wake its attached frontends."
   (let ((worker nil)
         (interrupt-worker-p nil))
@@ -882,8 +883,8 @@
                (throw +execution-interrupt-tag+ :interrupted)))))
         (when (plusp (length (execution-marker-buffer session)))
           (let ((text (execution-marker-buffer session)))
-            (feed-terminal (managed-terminal session) text)
-            (broadcast-session-bytes-under-lock session (encode-utf8 text))))
+            (set-terminal-input (managed-terminal session) text)
+            (set-session-output-under-lock session (get-utf8 text))))
         (let ((execution-error
                 (when (and (eq (managed-execution-state session) :running)
                            (eq (execution-kind session) :shell)
@@ -898,7 +899,7 @@
                        :format-arguments nil)))))
           (when execution-error
             ;; Preserve a shell draft when the marker never arrives.
-            (record-command-error-under-lock
+            (set-command-error-under-lock
              (execution-attachment session)
              (execution-input session)
              execution-error))
@@ -926,40 +927,40 @@
             (dolist (attachment attachments)
               (setf (managed-attachment-attached-p attachment) nil
                     (attachment-final-screen attachment)
-                    (copy-terminal (managed-terminal session)))
+                    (get-terminal-copy (managed-terminal session)))
               (condition-notify (attachment-condition attachment)))))))
     (when (and worker
                (not (eq worker (current-thread))))
       (ignore-errors (join-thread worker)))
     t))
 
-(defun run-session-reader (session)
+(defun set-session-reader (session)
   "Read PTY output in the background for SESSION."
   (let ((termination-condition nil))
     (handler-case
         (loop
-          while (session-running-p session)
+          while (get-session-running-p session)
           do (multiple-value-bind (bytes eof-p)
                (with-lock-held ((session-read-lock session))
-                 (read-output-bytes (managed-shell-session session)
+                 (get-shell-output-bytes (managed-shell-session session)
                                     :max-bytes +session-read-size+
                                     :wait-p nil))
                (when (and bytes (plusp (length bytes)))
-                 (record-session-output session bytes))
+                 (set-session-pty-output session bytes))
                (when eof-p
                  (return))
                (when (or (null bytes) (zerop (length bytes)))
                  (sleep 0.01))))
       (error (condition)
         (setf termination-condition condition)))
-    (mark-session-terminated session termination-condition)
-    (session-log session
+    (set-session-terminated session termination-condition)
+    (set-session-log session
                  "session-terminated"
                  :message (if termination-condition "error" "eof")
                  :condition termination-condition)
-    (close-managed-shell-session session)))
+    (del-managed-shell-session session)))
 
-(defun dequeue-attachment-output (attachment max-bytes)
+(defun get-attachment-output-chunk (attachment max-bytes)
   "Remove up to MAX-BYTES from ATTACHMENT's output buffer."
   (let* ((count (min max-bytes (attachment-buffer-bytes attachment)))
          (result (make-array count :element-type '(unsigned-byte 8)))
@@ -981,7 +982,7 @@
                        (subseq chunk amount))))
     result))
 
-(defun read-attachment (attachment &key (max-bytes 4096) (wait-p t))
+(defun get-attachment-output (attachment &key (max-bytes 4096) (wait-p t))
   "Read broadcast PTY bytes from ATTACHMENT."
   (check-type attachment attachment)
   (check-type max-bytes (integer 1))
@@ -990,7 +991,7 @@
       (loop
         (cond
           ((plusp (attachment-buffer-bytes attachment))
-           (return (values (dequeue-attachment-output attachment max-bytes)
+           (return (values (get-attachment-output-chunk attachment max-bytes)
                            nil)))
           ((or (not (managed-attachment-attached-p attachment))
                (managed-session-terminated-p session))
@@ -1001,7 +1002,7 @@
            (condition-wait (attachment-condition attachment)
                           (session-lock session))))))))
 
-(defun input-history (object)
+(defun get-input-history (object)
   "Return a copy of the session's newest-first input history."
   (let ((session (etypecase object
                    (managed-session object)
@@ -1009,7 +1010,7 @@
     (with-lock-held ((session-lock session))
       (mapcar #'copy-seq (session-input-history session)))))
 
-(defun execution-state (object)
+(defun get-execution-state (object)
   "Return the current execution state for a session or attachment."
   (let ((session (etypecase object
                    (managed-session object)
@@ -1019,19 +1020,19 @@
           :closed
           (managed-execution-state session)))))
 
-(defun input-draft (attachment)
+(defun get-input-draft (attachment)
   "Return ATTACHMENT's private input draft."
   (check-type attachment attachment)
   (let ((session (attachment-session attachment)))
     (with-lock-held ((session-lock session))
-      (input-editor-text (attachment-input-editor attachment)))))
+      (get-input-editor-text (attachment-input-editor attachment)))))
 
-(defun input-cursor (attachment)
+(defun get-input-cursor (attachment)
   "Return ATTACHMENT's input cursor position."
   (check-type attachment attachment)
   (let ((session (attachment-session attachment)))
     (with-lock-held ((session-lock session))
-      (input-editor-cursor (attachment-input-editor attachment)))))
+      (get-input-editor-cursor (attachment-input-editor attachment)))))
 
 (defun set-input-draft (attachment text)
   "Set ATTACHMENT's private input draft."
@@ -1039,10 +1040,10 @@
   (check-type text string)
   (let ((session (attachment-session attachment)))
     (with-lock-held ((session-lock session))
-      (input-editor-set-draft (attachment-input-editor attachment) text)))
+      (set-input-editor-draft (attachment-input-editor attachment) text)))
   attachment)
 
-(defun valid-input-p (input)
+(defun get-valid-input-p (input)
   "Return true when INPUT contains valid transport bytes."
   (or (stringp input)
       (and (vectorp input)
@@ -1050,23 +1051,23 @@
                    (and (integerp byte) (<= 0 byte 255)))
                  input))))
 
-(defun copy-input (input)
+(defun get-input-copy (input)
   "Return an independent copy of string or octet INPUT."
   (copy-seq input))
 
-(defun submit-input (attachment &optional (input nil input-supplied-p))
+(defun set-input-submission (attachment &optional (input nil input-supplied-p))
   "Submit ATTACHMENT's draft, or explicit INPUT, without interleaving."
   (check-type attachment attachment)
-  (when (and input-supplied-p (not (valid-input-p input)))
+  (when (and input-supplied-p (not (get-valid-input-p input)))
     (error "Input must be UTF-8 text or an octet vector."))
   (let ((session (attachment-session attachment)))
     (let ((explicit-input (when input-supplied-p
-                            (copy-input input))))
+                            (get-input-copy input))))
       (when input-supplied-p
         (with-lock-held ((session-lock session))
           (when (and (not (command-mode-p session))
                      (stringp explicit-input))
-            (input-editor-set-draft
+            (set-input-editor-draft
              (attachment-input-editor attachment)
              explicit-input))))
       (when (acquire-lock (session-input-lock session) nil)
@@ -1075,59 +1076,59 @@
                  (with-lock-held ((session-lock session))
                    (if (not (and (not (command-mode-p session))
                                  (managed-attachment-attached-p attachment)
-                                 (session-running-under-lock-p session)))
+                                 (get-session-running-under-lock-p session)))
                        (values nil nil)
                        (values t
                                (if input-supplied-p
                                    explicit-input
-                                   (copy-input
-                                    (input-editor-text
+                                   (get-input-copy
+                                    (get-input-editor-text
                                      (attachment-input-editor attachment)))))))
                (when accepted-p
-                 (session-log session "input-submit" :input value)
+                 (set-session-log session "input-submit" :input value)
                  (handler-case
                      (progn
                        (with-lock-held ((session-write-lock session))
-                         (write-input
+                         (set-shell-input
                           (managed-shell-session session)
                           value))
                        (with-lock-held ((session-lock session))
-                         (input-editor-clear
+                         (del-input-editor
                           (attachment-input-editor attachment)))
                        t)
                    (error (condition)
-                     (session-log session
+                     (set-session-log session
                                   "input-error"
                                   :input value
                                   :condition condition)
                      nil))))
           (release-lock (session-input-lock session)))))))
 
-(defun valid-command-kind-p (kind)
+(defun get-valid-command-kind-p (kind)
   "Return true when KIND names a command frontend language."
   (member kind '(:lisp :shell) :test #'eq))
 
-(defun submit-command (attachment input kind)
+(defun set-command-submission (attachment input kind)
   "Queue one complete command for ATTACHMENT's command frontend."
   (check-type attachment attachment)
   (check-type input string)
-  (unless (valid-command-kind-p kind)
+  (unless (get-valid-command-kind-p kind)
     (error "Command kind must be :LISP or :SHELL."))
-  (unless (eq kind (input-language input))
-    (return-from submit-command nil))
-  (unless (member (input-completeness input) '(:complete :error) :test #'eq)
-    (return-from submit-command nil))
+  (unless (eq kind (get-input-language input))
+    (return-from set-command-submission nil))
+  (unless (member (get-input-completeness input) '(:complete :error) :test #'eq)
+    (return-from set-command-submission nil))
   (let ((session (attachment-session attachment))
         (accepted-p nil))
     (with-lock-held ((session-lock session))
       (let* ((editor (attachment-input-editor attachment))
-             (draft (input-editor-text editor)))
+             (draft (get-input-editor-text editor)))
         (when (and (command-mode-p session)
                    (managed-attachment-attached-p attachment)
-                   (session-running-under-lock-p session)
+                   (get-session-running-under-lock-p session)
                    (eq (managed-execution-state session) :ready)
                    (plusp (length input))
-                   (= (input-editor-cursor editor) (length draft))
+                   (= (get-input-editor-cursor editor) (length draft))
                    (string= input draft))
           (setf (session-input-history session)
                 (cons (copy-seq input) (session-input-history session))
@@ -1142,19 +1143,19 @@
                 (execution-queue session)
                 (nconc (execution-queue session)
                        (list (list attachment (copy-seq input) kind))))
-          (input-editor-record-submission editor input)
+          (set-input-editor-submission editor input)
           ;; Clear the accepted draft before the worker can report an error.
-          (input-editor-clear editor)
+          (del-input-editor editor)
           (condition-notify (execution-condition session))
           (setf accepted-p t))))
     (when accepted-p
-      (session-log session
+      (set-session-log session
                    "command-submit"
                    :message (format nil "kind=~A" kind)
                    :input input))
     accepted-p))
 
-(defun interrupt-execution (object)
+(defun set-execution-interruption (object)
   "Interrupt the active command for OBJECT, if one exists."
   (let* ((attachment (when (typep object 'attachment) object))
          (session (etypecase object
@@ -1177,7 +1178,7 @@
           (when (and job-started-p shell-input-written-p)
             (with-lock-held ((session-write-lock session))
               (ignore-errors
-                (write-input (managed-shell-session session) (vector 3)))))
+                (set-shell-input (managed-shell-session session) (vector 3)))))
           (when (and job-started-p
                      thread
                      (not (eq thread (current-thread))))
@@ -1186,23 +1187,23 @@
                thread
                (lambda ()
                  (throw +execution-interrupt-tag+ :interrupted))))))
-      (session-log session
+      (set-session-log session
                    "execution-interrupt"
                    :message (format nil "kind=~A" kind))
       t)))
 
-(defun next-execution-marker (session)
+(defun get-next-execution-marker (session)
   "Return an opaque shell marker for SESSION."
   (declare (ignore session))
   (format nil "__LISPORE_COMMAND_DONE_~36R__"
           (random most-positive-fixnum)))
 
-(defun run-shell-command (session attachment input)
+(defun set-shell-command (session attachment input)
   "Run INPUT through SESSION's persistent shell."
-  (let ((token (next-execution-marker session))
+  (let ((token (get-next-execution-marker session))
         (command-condition nil))
     (with-lock-held ((session-lock session))
-      (when (session-running-under-lock-p session)
+      (when (get-session-running-under-lock-p session)
         (setf (execution-marker session) token
               (execution-marker-buffer session) ""
               (execution-shell-input-written-p session) nil
@@ -1211,7 +1212,7 @@
     (handler-case
         (progn
           (with-lock-held ((session-write-lock session))
-            (write-input
+            (set-shell-input
              (managed-shell-session session)
              ;; The wrapper prints a private marker with the command status.
              (format nil "~A~%command printf '~A:%d\\n' $?~%"
@@ -1219,39 +1220,39 @@
                      token))
             ;; Send Ctrl-C after the command reaches the PTY.
             (with-lock-held ((session-lock session))
-              (when (and (session-running-under-lock-p session)
+              (when (and (get-session-running-under-lock-p session)
                          (string= token (execution-marker session)))
                 (setf (execution-shell-input-written-p session) t)
                 (when (execution-interrupted-p session)
                   (ignore-errors
-                    (write-input
+                    (set-shell-input
                      (managed-shell-session session)
                      (vector 3))))))
           (with-lock-held ((session-lock session))
-            (loop while (and (session-running-under-lock-p session)
+            (loop while (and (get-session-running-under-lock-p session)
                              (eq (managed-execution-state session) :running))
                   do (condition-wait (execution-condition session)
                                      (session-lock session)))
             (setf command-condition (managed-execution-error session)))
           (when command-condition
-            (session-log session
+            (set-session-log session
                          "command-error"
                          :input input
                          :condition command-condition))))
       (error (condition)
         (with-lock-held ((session-lock session))
-          (record-command-error-under-lock
+          (set-command-error-under-lock
            attachment
            input
            condition)
-          (finish-execution-under-lock session condition))
+          (set-execution-finished-under-lock session condition))
         (setf command-condition condition)
-        (session-log session
+        (set-session-log session
                      "command-error"
                      :input input
                      :condition command-condition)))))
 
-(defun evaluate-lisp-command (session input)
+(defun get-lisp-evaluation (session input)
   "Evaluate INPUT in SESSION's persistent user package."
   (with-output-to-string (stream)
     (let ((*package* (managed-lisp-package session))
@@ -1270,110 +1271,110 @@
             (format stream "~{~S~^ ~}~%"
                     (multiple-value-list (eval form)))))))))
 
-(defun run-lisp-command (session attachment input)
+(defun set-lisp-command (session attachment input)
   "Evaluate INPUT and publish its output."
   (let ((result
           (catch +execution-interrupt-tag+
             (handler-case
                 (progn
-                  (let ((output (evaluate-lisp-command session input)))
-                    (publish-session-output session output))
+                  (let ((output (get-lisp-evaluation session input)))
+                    (set-session-published-output session output))
                   :finished)
               (error (caught-condition)
                 (with-lock-held ((session-lock session))
-                  (record-command-error-under-lock
+                  (set-command-error-under-lock
                    attachment
                    input
                    caught-condition))
-                (session-log session
+                (set-session-log session
                              "command-error"
                              :input input
                              :condition caught-condition)
-                (publish-session-output
+                (set-session-published-output
                  session
                  (format nil "Error: ~A~%" caught-condition))
                 (list :error caught-condition))))))
     (when (eq result :interrupted)
-      (publish-session-output
+      (set-session-published-output
        session
        (format nil "Execution interrupted.~%")))
     (with-lock-held ((session-lock session))
-      (finish-execution-under-lock
+      (set-execution-finished-under-lock
        session
        (when (and (consp result)
                   (eq (first result) :error))
          (second result))))))
 
-(defun run-execution-job (session job)
+(defun set-execution-job (session job)
   "Run one queued command JOB."
   (destructuring-bind (attachment input kind) job
     (let ((result
             (catch +execution-interrupt-tag+
-              (let ((run-p
+              (let ((job-ready-p
                       (with-lock-held ((session-lock session))
                         (if (execution-interrupted-p session)
                             nil
                             (progn
                               (setf (execution-job-started-p session) t)
                               t)))))
-                (if run-p
+                (if job-ready-p
                     (progn
-                      (session-log session
+                      (set-session-log session
                                    "command-start"
                                    :message (format nil "kind=~A" kind)
                                    :input input)
                       (ecase kind
-                        (:lisp (run-lisp-command session attachment input))
-                        (:shell (run-shell-command session attachment input)))
-                      (session-log session
+                        (:lisp (set-lisp-command session attachment input))
+                        (:shell (set-shell-command session attachment input)))
+                      (set-session-log session
                                    "command-finish"
                                    :message (format nil "kind=~A" kind)
                                    :input input))
                     (progn
-                      (session-log session
+                      (set-session-log session
                                    "command-interrupted"
                                    :message (format nil "kind=~A" kind)
                                    :input input)
-                      (publish-session-output
+                      (set-session-published-output
                        session
                        (format nil "Execution interrupted.~%"))
                       (with-lock-held ((session-lock session))
-                        (finish-execution-under-lock session)))))
+                        (set-execution-finished-under-lock session)))))
               :finished)))
       (when (eq result :interrupted)
-        (publish-session-output
+        (set-session-published-output
          session
          (format nil "Execution interrupted.~%"))
         (with-lock-held ((session-lock session))
-          (finish-execution-under-lock session))))))
+          (set-execution-finished-under-lock session))))))
 
-(defun run-execution-worker (session)
+(defun set-execution-worker (session)
   "Serve SESSION's serialized command queue."
   (loop
     do (let ((job
                (with-lock-held ((session-lock session))
                  (loop
                    (when (execution-stop-p session)
-                     (return-from run-execution-worker nil))
+                     (return-from set-execution-worker nil))
                    (when (execution-queue session)
                      (return (pop (execution-queue session))))
                    (condition-wait (execution-condition session)
                                   (session-lock session))))))
          (handler-case
-             (run-execution-job session job)
+             (set-execution-job session job)
            (error (condition)
              (with-lock-held ((session-lock session))
-               (record-command-error-under-lock
+               (set-command-error-under-lock
                 (first job)
                 (second job)
                 condition)
-               (finish-execution-under-lock session condition))
-             (session-log session
+               (set-execution-finished-under-lock session condition))
+             (set-session-log session
                           "execution-worker-error"
                           :input (second job)
                           :condition condition))))))
 
-(defun terminate-managed-session (session)
+(defun del-managed-session (session)
   "Terminate SESSION and wait for its reader thread."
   (let ((thread nil)
         (worker nil))
@@ -1384,12 +1385,12 @@
             worker (execution-thread session))
       (condition-notify (execution-condition session)))
     ;; Stop an evaluator before waiting for the worker thread.
-    (ignore-errors (interrupt-execution session))
-    (close-managed-shell-session session)
+    (ignore-errors (set-execution-interruption session))
+    (del-managed-shell-session session)
     (when (and thread
                (not (eq thread (current-thread))))
       (ignore-errors (join-thread thread)))
-    (mark-session-terminated session)
+    (set-session-terminated session)
     (when (and worker
                (not (eq worker (current-thread))))
       (ignore-errors (join-thread worker)))
@@ -1398,16 +1399,26 @@
       (setf (managed-lisp-package session) nil))
     t))
 
-(defun terminate-session (manager session-id)
+(defun del-session (manager session-id)
   "Terminate the session registered under SESSION-ID."
-  (let ((session (lookup-session manager session-id)))
+  (let ((session (get-session manager session-id)))
     (when session
-      (terminate-managed-session session))))
+      (del-managed-session session)
+      (with-lock-held ((manager-lock manager))
+        (when (eq session (gethash session-id (manager-sessions manager)))
+          (remhash session-id (manager-sessions manager))
+          (when (and (session-name session)
+                     (eq session
+                         (gethash (session-name session)
+                                  (manager-named-sessions manager))))
+            (remhash (session-name session)
+                     (manager-named-sessions manager)))))
+      t)))
 
-(defun close-session-manager (manager)
+(defun del-session-manager (manager)
   "Terminate every session and stop the in-process registry."
   (check-type manager session-manager)
-  (manager-log manager "manager-close")
+  (set-manager-log manager "manager-close")
   (let ((sessions nil)
         (cleanup-thread nil)
         (logger nil))
@@ -1419,7 +1430,7 @@
                  (declare (ignore id))
                  (push session sessions))
                (manager-sessions manager)))
-    (mapc #'terminate-managed-session sessions)
+    (mapc #'del-managed-session sessions)
     (when (and cleanup-thread
                (not (eq cleanup-thread (current-thread))))
       (ignore-errors (join-thread cleanup-thread)))
@@ -1429,5 +1440,5 @@
       (when (eq logger (manager-logger manager))
         (setf (manager-logger manager) nil)))
     (when logger
-      (close-diagnostic-logger logger))
+      (del-diagnostic-logger logger))
     t))

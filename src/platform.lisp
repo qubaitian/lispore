@@ -40,12 +40,12 @@
 (defcfun ("_exit" %exit) :void
   (status :int))
 
-(defcfun ("read" %read-fd) :long
+(defcfun ("read" %get-fd) :long
   (fd :int)
   (buffer :pointer)
   (count :unsigned-long))
 
-(defcfun ("write" %write-fd) :long
+(defcfun ("write" %set-fd) :long
   (fd :int)
   (buffer :pointer)
   (count :unsigned-long))
@@ -147,35 +147,35 @@
                      (platform-error-errno condition)
                      (platform-error-message condition)))))
 
-(defun current-errno ()
+(defun get-current-errno ()
   (mem-ref (%errno-location) :int))
 
-(defun signal-platform-error (operation)
-  (let ((errno (current-errno)))
+(defun set-platform-error (operation)
+  (let ((errno (get-current-errno)))
     (error 'platform-error
            :operation operation
            :errno errno
            :message (%strerror errno))))
 
-(defun tty-p (fd)
+(defun get-tty-p (fd)
   (plusp (%isatty fd)))
 
 (defun set-nonblocking (fd)
   (let ((flags (%fcntl fd +f-getfl+)))
     (when (= flags -1)
-      (signal-platform-error "fcntl(F_GETFL)"))
+      (set-platform-error "fcntl(F_GETFL)"))
     (when (= (%fcntl fd +f-setfl+ :int (logior flags +o-nonblock+)) -1)
-      (signal-platform-error "fcntl(F_SETFL)"))))
+      (set-platform-error "fcntl(F_SETFL)"))))
 
 (defun set-close-on-exec (fd)
   "Prevent FD from leaking into an exec'ed child process."
   (let ((flags (%fcntl fd +f-getfd+)))
     (when (= flags -1)
-      (signal-platform-error "fcntl(F_GETFD)"))
+      (set-platform-error "fcntl(F_GETFD)"))
     (when (= (%fcntl fd +f-setfd+ :int (logior flags +fd-cloexec+)) -1)
-      (signal-platform-error "fcntl(F_SETFD)"))))
+      (set-platform-error "fcntl(F_SETFD)"))))
 
-(defun start-pty (shell width height)
+(defun new-pty (shell width height)
   "Start SHELL inside a non-blocking PTY."
   (check-type shell string)
   (check-type width (integer 1))
@@ -193,7 +193,7 @@
            (%execl shell shell :string "-i" :pointer (null-pointer))
            (%exit 127))
           ((minusp pid)
-           (signal-platform-error "forkpty"))
+           (set-platform-error "forkpty"))
           (t
            (let ((fd (mem-ref master :int)))
              (handler-case
@@ -209,7 +209,7 @@
                      (%waitpid pid status 0)))
                  (error condition))))))))))
 
-(defun poll-fds (descriptors &key (timeout -1))
+(defun get-poll-events (descriptors &key (timeout -1))
   "Wait for DESCRIPTORS and return their nonzero revents."
   (check-type timeout integer)
   (if (null descriptors)
@@ -232,14 +232,14 @@
                             when (plusp revents)
                               collect (cons fd revents))))
                    ((zerop result) (return nil))
-                   ((= (current-errno) +eintr+) nil)
-                   (t (signal-platform-error "poll")))))))
+                   ((= (get-current-errno) +eintr+) nil)
+                   (t (set-platform-error "poll")))))))
 
-(defun read-fd (fd &key (max-bytes 4096) (wait-p nil))
+(defun get-fd (fd &key (max-bytes 4096) (wait-p nil))
   "Read bytes from FD and return bytes plus an end-of-file flag."
   (check-type max-bytes (integer 1))
   (with-foreign-object (buffer `(:array :unsigned-char ,max-bytes))
-    (loop for count = (%read-fd fd buffer max-bytes)
+    (loop for count = (%get-fd fd buffer max-bytes)
           do (cond
                ((plusp count)
                 (let ((bytes (make-array count
@@ -250,17 +250,17 @@
                   (return (values bytes nil))))
                ((zerop count) (return (values #() t)))
                (t
-                (let ((errno (current-errno)))
+                (let ((errno (get-current-errno)))
                   (cond
                     ((= errno +eintr+) nil)
                     ((= errno +eagain+)
                      (if wait-p
-                         (poll-fds (list (cons fd +pollin+)) :timeout -1)
+                         (get-poll-events (list (cons fd +pollin+)) :timeout -1)
                          (return (values #() nil))))
                     ((= errno +eio+) (return (values #() t)))
-                    (t (signal-platform-error "read")))))))))
+                    (t (set-platform-error "read")))))))))
 
-(defun write-fd (fd bytes)
+(defun set-fd (fd bytes)
   "Write all BYTES to FD and return the byte count."
   (check-type bytes vector)
   (let ((length (length bytes)))
@@ -272,21 +272,21 @@
                          (aref bytes index)))
           (loop with offset = 0
                 while (< offset length)
-                for count = (%write-fd fd (inc-pointer buffer offset)
+                for count = (%set-fd fd (inc-pointer buffer offset)
                                       (- length offset))
                 do (cond
                      ((plusp count) (incf offset count))
                      ((zerop count) (return offset))
                      (t
-                      (let ((errno (current-errno)))
+                      (let ((errno (get-current-errno)))
                         (cond
                           ((= errno +eintr+) nil)
                           ((= errno +eagain+)
-                           (poll-fds (list (cons fd +pollout+)) :timeout -1))
-                          (t (signal-platform-error "write"))))))
+                           (get-poll-events (list (cons fd +pollout+)) :timeout -1))
+                          (t (set-platform-error "write"))))))
                 finally (return offset))))))
 
-(defun resize-pty (fd width height)
+(defun set-pty-size (fd width height)
   "Set the PTY terminal size in character cells."
   (check-type width (integer 1))
   (check-type height (integer 1))
@@ -296,10 +296,10 @@
           (foreign-slot-value winsize '(:struct winsize) 'x-pixels) 0
           (foreign-slot-value winsize '(:struct winsize) 'y-pixels) 0)
     (when (= (%ioctl fd +tiocs-winsz+ :pointer winsize) -1)
-      (signal-platform-error "ioctl(TIOCSWINSZ)")))
+      (set-platform-error "ioctl(TIOCSWINSZ)")))
   t)
 
-(defun terminal-size (fd)
+(defun get-terminal-size (fd)
   "Return FD terminal size as width and height values."
   (with-foreign-object (winsize '(:struct winsize))
     (if (= (%ioctl fd +tiocg-winsz+ :pointer winsize) -1)
@@ -307,24 +307,24 @@
         (values (foreign-slot-value winsize '(:struct winsize) 'columns)
                 (foreign-slot-value winsize '(:struct winsize) 'rows)))))
 
-(defun wait-process (pid &key (no-hang-p nil))
+(defun get-process-status (pid &key (no-hang-p nil))
   "Wait for PID and return its status, or NIL while it runs."
   (with-foreign-object (status :int)
     (loop for result = (%waitpid pid status (if no-hang-p +wait-nohang+ 0))
           do (cond
                ((= result pid) (return (mem-ref status :int)))
                ((zerop result) (return nil))
-               ((and (= result -1) (= (current-errno) +eintr+)) nil)
-               (t (signal-platform-error "waitpid"))))))
+               ((and (= result -1) (= (get-current-errno) +eintr+)) nil)
+               (t (set-platform-error "waitpid"))))))
 
-(defun terminate-process (pid)
+(defun del-process (pid)
   "Send SIGHUP to PID."
   (when (and (minusp (%kill pid +sighup+))
-             (/= (current-errno) +esrch+))
-    (signal-platform-error "kill(SIGHUP)"))
+             (/= (get-current-errno) +esrch+))
+    (set-platform-error "kill(SIGHUP)"))
   t)
 
-(defun prevent-socket-sigpipe (fd)
+(defun set-socket-sigpipe (fd)
   "Prevent a closed socket from terminating the Lisp process."
   (with-foreign-object (value :int)
     (setf (mem-ref value :int) 1)
@@ -333,32 +333,32 @@
                                +so-nosigpipe+
                                value
                                (foreign-type-size :int)))
-      (signal-platform-error "setsockopt(SO_NOSIGPIPE)")))
+      (set-platform-error "setsockopt(SO_NOSIGPIPE)")))
   t)
 
-(defun close-pty (fd)
+(defun del-pty (fd)
   "Close the PTY master FD."
   (when (and (minusp (%close-fd fd))
-             (/= (current-errno) 9))
-    (signal-platform-error "close"))
+             (/= (get-current-errno) 9))
+    (set-platform-error "close"))
   t)
 
-(defun call-with-raw-terminal (function &key (fd 0))
+(defun set-raw-terminal (function &key (fd 0))
   "Run FUNCTION with FD in raw mode and always restore its settings."
-  (if (not (tty-p fd))
+  (if (not (get-tty-p fd))
       (funcall function)
       (with-foreign-object (saved '(:struct termios))
         (when (= (%tcgetattr fd saved) -1)
-          (signal-platform-error "tcgetattr"))
+          (set-platform-error "tcgetattr"))
         (unwind-protect
             (with-foreign-object (raw '(:struct termios))
               (when (= (%tcgetattr fd raw) -1)
-                (signal-platform-error "tcgetattr"))
+                (set-platform-error "tcgetattr"))
               (%cfmakeraw raw)
               (when (= (%tcsetattr fd +tcsanow+ raw) -1)
-                (signal-platform-error "tcsetattr(raw)"))
+                (set-platform-error "tcsetattr(raw)"))
               (funcall function))
           ;; Keep the original error when restoration itself fails.
           (when (= (%tcsetattr fd +tcsanow+ saved) -1)
             (warn "Terminal restoration failed with errno ~D."
-                  (current-errno)))))))
+                  (get-current-errno)))))))

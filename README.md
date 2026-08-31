@@ -94,7 +94,7 @@ This example starts the passthrough frontend directly.
 ```sh
 sbcl --noinform --load init \
   --eval '(asdf:load-system "lispore")' \
-  --eval '(lispore:run-passthrough)'
+  --eval '(lispore:set-passthrough-frontend)'
 ```
 
 The terminal frontend restores terminal settings.

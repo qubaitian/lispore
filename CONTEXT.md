@@ -184,6 +184,11 @@ _Avoid_: shell output
 One of `new`, `set`, `get`, or `del` that manages one value position.
 _Avoid_: command
 
+**Operation prefix**:
+The leading verb for a Lispore function.
+It uses only `new`, `set`, `get`, or `del`.
+_Avoid_: start, attach, lookup, terminate
+
 **Value position**:
 An address that contains one non-`nil` value or no value.
 _Avoid_: empty object

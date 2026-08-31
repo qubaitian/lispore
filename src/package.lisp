@@ -5,25 +5,25 @@
    #:+pollhup+
    #:+pollin+
    #:+pollnval+
-   #:call-with-raw-terminal
-   #:close-pty
-   #:poll-fds
-   #:prevent-socket-sigpipe
-   #:read-fd
-   #:resize-pty
+   #:set-raw-terminal
+   #:del-pty
+   #:get-poll-events
+   #:set-socket-sigpipe
+   #:get-fd
+   #:set-pty-size
    #:set-close-on-exec
-   #:start-pty
-   #:terminal-size
-   #:terminate-process
-   #:tty-p
-   #:wait-process
-   #:write-fd))
+   #:new-pty
+   #:get-terminal-size
+   #:del-process
+   #:get-tty-p
+   #:get-process-status
+   #:set-fd))
 
 (defpackage #:lispore.utf8
   (:use #:cl)
   (:export
-   #:decode-utf8-chunk
-   #:encode-utf8))
+   #:get-utf8-chunk
+   #:get-utf8))
 
 (defpackage #:lispore.logging
   (:use #:cl)
@@ -38,76 +38,76 @@
                 #:thread-name
                 #:with-lock-held)
   (:export
-   #:close-diagnostic-logger
+   #:del-diagnostic-logger
    #:diagnostic-logger
-   #:log-diagnostic-event
-   #:make-diagnostic-logger))
+   #:new-diagnostic-logger
+   #:set-diagnostic-event))
 
 (defpackage #:lispore.input
   (:use #:cl)
   (:import-from #:lispore.utf8
-                #:decode-utf8-chunk)
+                #:get-utf8-chunk)
   (:export
    #:input-editor
-   #:input-editor-add-draft-history
-   #:input-editor-clear
-   #:input-editor-clear-draft-history
-   #:input-editor-cursor
-   #:input-editor-feed
-   #:input-completeness
-   #:input-editor-paste
-   #:input-editor-record-submission
-   #:input-editor-set-draft
-   #:input-editor-set-history
-   #:input-editor-text
-   #:input-language
    #:input-event-text
    #:input-event-type
-   #:make-input-editor))
+   #:new-input-editor
+   #:get-input-editor-cursor
+   #:get-input-editor-text
+   #:get-input-completeness
+   #:get-input-language
+   #:set-input-editor-bytes
+   #:set-input-editor-draft
+   #:set-input-editor-draft-history
+   #:set-input-editor-history
+   #:set-input-editor-paste
+   #:set-input-editor-submission
+   #:del-input-editor
+   #:del-input-editor-draft-history))
 
 (defpackage #:lispore.pty
   (:use #:cl)
   (:import-from #:lispore.platform
-                #:close-pty
-                #:read-fd
-                #:resize-pty
-                #:start-pty
-                #:terminate-process
-                #:wait-process
-                #:write-fd)
+                #:del-pty
+                #:get-fd
+                #:set-pty-size
+                #:new-pty
+                #:del-process
+                #:get-process-status
+                #:set-fd)
   (:import-from #:lispore.utf8
-                #:decode-utf8-chunk
-                #:encode-utf8)
+                #:get-utf8-chunk
+                #:get-utf8)
   (:export
-   #:close-session
+   #:del-shell-session
    #:pty-master
-   #:read-output
-   #:read-output-bytes
-   #:resize-session
+   #:get-shell-output
+   #:get-shell-output-bytes
+   #:set-shell-size
    #:session-eof-p
    #:session-open-p
    #:shell-session
-   #:start-shell
-   #:wait-for-session
-   #:write-input))
+   #:new-shell-session
+   #:get-shell-process-status
+   #:set-shell-input))
 
 (defpackage #:lispore.terminal
   (:use #:cl)
   (:export
    #:*default-status-line-text*
-   #:cell-at
-   #:copy-terminal
-   #:feed-terminal
-   #:make-terminal-emulator
-   #:render-terminal
-   #:resize-terminal
+   #:get-terminal-cell
+   #:get-terminal-copy
+   #:set-terminal-input
+   #:new-terminal-emulator
+   #:get-terminal-render
+   #:set-terminal-size
    #:screen-cell-character
    #:screen-cell-style
-   #:screen-lines
-   #:set-status-line
+   #:get-terminal-screen-lines
+   #:set-terminal-status-line
    #:terminal-emulator
-   #:terminal-size
-   #:cursor-position))
+   #:get-terminal-size
+   #:get-terminal-cursor-position))
 
 (defpackage #:lispore.session
   (:use #:cl)
@@ -124,72 +124,72 @@
                 #:release-lock
                 #:with-lock-held)
   (:import-from #:lispore.input
-                #:input-editor-add-draft-history
-                #:input-editor-clear
-                #:input-editor-clear-draft-history
-                #:input-completeness
-                #:input-editor-cursor
-                #:input-editor-record-submission
-                #:input-editor-set-draft
-                #:input-editor-set-history
-                #:input-editor-text
-                #:input-language
-                #:make-input-editor)
+                #:set-input-editor-draft-history
+                #:del-input-editor
+                #:del-input-editor-draft-history
+                #:get-input-completeness
+                #:get-input-editor-cursor
+                #:set-input-editor-submission
+                #:set-input-editor-draft
+                #:set-input-editor-history
+                #:get-input-editor-text
+                #:get-input-language
+                #:new-input-editor)
   (:import-from #:lispore.logging
-                #:close-diagnostic-logger
-                #:log-diagnostic-event)
+                #:del-diagnostic-logger
+                #:set-diagnostic-event)
   (:import-from #:lispore.pty
-                #:close-session
-                #:read-output-bytes
-                #:start-shell
-                #:write-input)
+                #:del-shell-session
+                #:get-shell-output-bytes
+                #:new-shell-session
+                #:set-shell-input)
   (:import-from #:lispore.terminal
                 #:*default-status-line-text*
-                #:copy-terminal
-                #:feed-terminal
-                #:make-terminal-emulator
-                #:set-status-line)
+                #:get-terminal-copy
+                #:set-terminal-input
+                #:new-terminal-emulator
+                #:set-terminal-status-line)
   (:import-from #:lispore.utf8
-                #:decode-utf8-chunk
-                #:encode-utf8)
+                #:get-utf8-chunk
+                #:get-utf8)
   (:export
-   #:attach-session
    #:attachment
    #:attachment-input-editor
    #:attachment-mode
    #:attachment-session
-   #:attachment-start-screen
-   #:attachment-screen
-   #:attachment-attached-p
-   #:close-session-manager
-   #:detach
-   #:execution-state
-   #:interrupt-execution
-   #:input-draft
-   #:input-cursor
-   #:input-history
-   #:find-or-create-session
-   #:install-session-manager-logger
-   #:lookup-session
-   #:lookup-session-by-name
-   #:make-session-manager
-   #:manager-debug-enabled-p
-   #:manager-log
-   #:read-attachment
-   #:retained-screen
-   #:restore-session
-   #:reattach-session
-   #:session-running-p
-   #:session-error
+   #:get-attachment-start-screen
+   #:get-attachment-screen
+   #:get-attachment-attached-p
+   #:del-session-manager
+   #:del-session-manager-logger
+   #:del-current-session
+   #:get-execution-state
+   #:set-execution-interruption
+   #:get-input-draft
+   #:get-input-cursor
+   #:get-input-history
+   #:set-session-manager-logger
+   #:get-session
+   #:get-session-by-name
+   #:new-session-manager
+   #:get-manager-debug-value
+   #:set-manager-debug-value
+   #:get-manager-debug-enabled-p
+   #:set-manager-log
+   #:get-attachment-output
+   #:get-retained-screen
+   #:set-current-session
+   #:get-session-running-p
+   #:get-session-error
    #:session-id
-   #:session-list
+   #:get-session-list
    #:session-name
-   #:publish-session-output
-   #:submit-command
-   #:terminate-session
+   #:set-session-published-output
+   #:set-command-submission
+   #:del-session
    #:set-input-draft
-   #:start-session
-   #:submit-input))
+   #:new-session
+   #:set-input-submission))
 
 (defpackage #:lispore.frontend
   (:use #:cl)
@@ -198,182 +198,198 @@
                 #:+pollhup+
                 #:+pollin+
                 #:+pollnval+
-                #:call-with-raw-terminal
-                #:poll-fds
-                #:read-fd
-                #:terminal-size
-                #:write-fd)
+                #:set-raw-terminal
+                #:get-poll-events
+                #:get-fd
+                #:get-terminal-size
+                #:set-fd)
   (:import-from #:lispore.pty
-                #:close-session
+                #:del-shell-session
                 #:pty-master
-                #:read-output-bytes
-                #:resize-session
-                #:start-shell
-                #:wait-for-session
-                #:write-input)
+                #:get-shell-output-bytes
+                #:set-shell-size
+                #:new-shell-session
+                #:get-shell-process-status
+                #:set-shell-input)
   (:import-from #:lispore.session
                 #:attachment-mode
                 #:attachment-input-editor
-                #:attachment-start-screen
-                #:attachment-screen
+                #:get-attachment-start-screen
+                #:get-attachment-screen
                 #:attachment-session
-                #:detach
-                #:execution-state
-                #:input-cursor
-                #:input-history
-                #:input-draft
-                #:read-attachment
+                #:del-current-session
+                #:get-execution-state
+                #:get-input-cursor
+                #:get-input-history
+                #:get-input-draft
+                #:get-attachment-output
                 #:session-id
-                #:interrupt-execution
-                #:submit-command
-                #:submit-input)
+                #:set-execution-interruption
+                #:set-command-submission
+                #:set-input-submission)
   (:import-from #:lispore.input
-                #:input-editor-clear
-                #:input-completeness
-                #:input-editor-feed
-                #:input-language
-                #:input-editor-paste
-                #:input-editor-set-history
+                #:del-input-editor
+                #:get-input-completeness
+                #:set-input-editor-bytes
+                #:get-input-language
+                #:set-input-editor-paste
+                #:set-input-editor-history
                 #:input-event-text
                 #:input-event-type)
   (:import-from #:lispore.terminal
                 #:*default-status-line-text*
-                #:render-terminal
-                #:set-status-line)
+                #:get-terminal-render
+                #:set-terminal-status-line)
   (:import-from #:lispore.utf8
-                #:encode-utf8)
+                #:get-utf8)
   (:export
-   #:interactive-shell
-   #:run-command
-   #:run-passthrough))
+   #:set-interactive-shell
+   #:set-command-frontend
+   #:set-passthrough-frontend))
 
 (defpackage #:lispore
   (:use #:cl)
   (:import-from #:lispore.frontend
-                #:interactive-shell
-                #:run-command
-                #:run-passthrough)
+                #:set-interactive-shell
+                #:set-command-frontend
+                #:set-passthrough-frontend)
   (:import-from #:lispore.pty
-                #:close-session
+                #:del-shell-session
                 #:pty-master
-                #:read-output
-                #:read-output-bytes
-                #:resize-session
+                #:get-shell-output
+                #:get-shell-output-bytes
+                #:set-shell-size
                 #:session-eof-p
                 #:session-open-p
                 #:shell-session
-                #:start-shell
-                #:wait-for-session
-                #:write-input)
+                #:new-shell-session
+                #:get-shell-process-status
+                #:set-shell-input)
   (:import-from #:lispore.session
-                #:attach-session
-                #:attachment-mode
+                #:attachment
                 #:attachment-input-editor
+                #:attachment-mode
                 #:attachment-session
-                #:attachment-screen
-                #:attachment-attached-p
-                #:close-session-manager
-                #:detach
-                #:interrupt-execution
-                #:input-draft
-                #:input-cursor
-                #:input-history
-                #:find-or-create-session
-                #:install-session-manager-logger
-                #:lookup-session
-                #:lookup-session-by-name
-                #:make-session-manager
-                #:manager-debug-enabled-p
-                #:manager-log
-                #:publish-session-output
-                #:read-attachment
-                #:retained-screen
-                #:restore-session
-                #:reattach-session
-                #:session-running-p
-                #:session-error
+                #:get-attachment-screen
+                #:get-attachment-attached-p
+                #:get-attachment-start-screen
+                #:del-session-manager
+                #:del-session-manager-logger
+                #:del-current-session
+                #:set-execution-interruption
+                #:get-input-draft
+                #:get-input-cursor
+                #:get-input-history
+                #:set-session-manager-logger
+                #:get-session
+                #:get-session-by-name
+                #:new-session-manager
+                #:get-manager-debug-value
+                #:set-manager-debug-value
+                #:get-manager-debug-enabled-p
+                #:set-manager-log
+                #:set-session-published-output
+                #:get-attachment-output
+                #:get-retained-screen
+                #:set-current-session
+                #:get-session-running-p
+                #:get-session-error
                 #:session-id
-                #:session-list
+                #:get-session-list
                 #:session-name
-                #:execution-state
+                #:get-execution-state
                 #:set-input-draft
-                #:start-session
-                #:submit-command
-                #:terminate-session
-                #:submit-input)
+                #:new-session
+                #:set-command-submission
+                #:del-session
+                #:set-input-submission)
   (:import-from #:lispore.terminal
                 #:*default-status-line-text*
-                #:cell-at
-                #:feed-terminal
-                #:make-terminal-emulator
-                #:render-terminal
-                #:resize-terminal
+                #:get-terminal-cell
+                #:set-terminal-input
+                #:new-terminal-emulator
+                #:get-terminal-copy
+                #:get-terminal-render
+                #:set-terminal-size
                 #:screen-cell-character
                 #:screen-cell-style
-                #:screen-lines
-                #:set-status-line
+                #:get-terminal-screen-lines
+                #:set-terminal-status-line
                 #:terminal-emulator
-                #:terminal-size
-                #:cursor-position)
+                #:get-terminal-size
+                #:get-terminal-cursor-position)
   (:export
-   #:attach-session
-   #:attachment-attached-p
+   #:attachment
    #:attachment-input-editor
    #:attachment-mode
-   #:attachment-screen
    #:attachment-session
-   #:cell-at
-   #:close-session
-   #:close-session-manager
-   #:cursor-position
-   #:detach
-   #:feed-terminal
-   #:input-draft
-   #:input-cursor
-   #:input-history
-   #:find-or-create-session
-   #:install-session-manager-logger
-   #:interrupt-execution
-   #:interactive-shell
-   #:lookup-session
-   #:lookup-session-by-name
-   #:make-terminal-emulator
-   #:make-session-manager
-   #:manager-debug-enabled-p
-   #:manager-log
+   #:get-attachment-attached-p
+   #:get-attachment-screen
+   #:get-attachment-start-screen
+   #:del-current-session
+   #:del-shell-session
+   #:del-session
+   #:del-session-manager
+   #:del-session-manager-logger
+   #:get-attachment-output
+   #:get-execution-state
+   #:get-input-cursor
+   #:get-input-draft
+   #:get-input-history
+   #:get-manager-debug-enabled-p
+   #:get-manager-debug-value
+   #:get-retained-screen
+   #:get-session
+   #:get-session-by-name
+   #:get-session-error
+   #:get-session-list
+   #:get-session-running-p
+   #:get-shell-output
+   #:get-shell-output-bytes
+   #:get-shell-process-status
+   #:get-terminal-cell
+   #:get-terminal-copy
+   #:get-terminal-cursor-position
+   #:get-terminal-render
+   #:get-terminal-screen-lines
+   #:get-terminal-size
+   #:new-session
+   #:new-session-manager
+   #:new-shell-session
+   #:new-terminal-emulator
    #:pty-master
-   #:publish-session-output
-   #:read-output
-   #:read-output-bytes
-   #:read-attachment
-   #:render-terminal
-   #:resize-terminal
-   #:resize-session
-   #:retained-screen
-   #:restore-session
-   #:reattach-session
-   #:run-command
-   #:run-passthrough
    #:screen-cell-character
    #:screen-cell-style
-   #:screen-lines
-   #:set-status-line
    #:session-eof-p
-   #:session-running-p
-   #:session-error
-   #:session-list
-   #:session-name
-   #:execution-state
    #:session-id
+   #:session-name
    #:session-open-p
-   #:shell-session
+   #:set-command-frontend
+   #:set-command-submission
+   #:set-current-session
+   #:set-execution-interruption
    #:set-input-draft
-   #:start-session
-   #:start-shell
-   #:submit-input
-   #:submit-command
-   #:terminate-session
-   #:terminal-emulator
-   #:terminal-size
-   #:wait-for-session
-   #:write-input))
+   #:set-input-submission
+   #:set-interactive-shell
+   #:set-manager-debug-value
+   #:set-manager-log
+   #:set-passthrough-frontend
+   #:set-session-manager-logger
+   #:set-session-published-output
+   #:set-shell-input
+   #:set-shell-size
+   #:set-terminal-input
+   #:set-terminal-size
+   #:set-terminal-status-line
+   #:shell-session
+   #:terminal-emulator))
+
+(defpackage #:lispore.api
+  (:import-from #:bordeaux-threads
+                #:make-lock
+                #:with-lock-held)
+  (:export
+   #:new
+   #:set
+   #:get
+   #:del))

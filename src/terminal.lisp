@@ -4,9 +4,15 @@
 (defparameter *default-status-line-text* " lispore | shell ")
 
 (defstruct (screen-cell
-            (:constructor make-screen-cell (character style)))
+            (:constructor new-screen-cell (character style))
+            (:copier nil))
   (character #\Space :type character)
   (style nil :type list))
+
+(defun get-screen-cell-copy (cell)
+  "Return an independent copy of CELL."
+  (new-screen-cell (screen-cell-character cell)
+                   (copy-list (screen-cell-style cell))))
 
 (defclass terminal-emulator ()
   ((width
@@ -53,19 +59,19 @@
     :initform nil
     :accessor osc-escape-p)))
 
-(defun make-blank-row (width)
+(defun new-terminal-row (width)
   (make-array width
               :initial-contents
               (loop repeat width
-                    collect (make-screen-cell #\Space nil))))
+                    collect (new-screen-cell #\Space nil))))
 
-(defun make-blank-screen (width height)
+(defun new-terminal-screen (width height)
   (make-array height
               :initial-contents
               (loop repeat height
-                    collect (make-blank-row width))))
+                    collect (new-terminal-row width))))
 
-(defun make-terminal-emulator (&key (width 80)
+(defun new-terminal-emulator (&key (width 80)
                                     (height 24)
                                     (content-height height))
   "Create a terminal emulator with WIDTH columns and HEIGHT rows."
@@ -78,16 +84,16 @@
                  :width width
                  :height height
                  :content-height content-height
-                 :cells (make-blank-screen width height)))
+                 :cells (new-terminal-screen width height)))
 
-(defun terminal-size (terminal)
+(defun get-terminal-size (terminal)
   "Return the emulator size as width and height values."
   (values (terminal-width terminal)
           (terminal-height terminal)))
 
-(defun copy-terminal (terminal)
+(defun get-terminal-copy (terminal)
   "Return an independent copy of TERMINAL's retained screen state."
-  (let ((copy (make-terminal-emulator
+  (let ((copy (new-terminal-emulator
                :width (terminal-width terminal)
                :height (terminal-height terminal)
                :content-height (terminal-content-height terminal))))
@@ -100,7 +106,7 @@
                           (length row)
                           :initial-contents
                           (loop for cell across row
-                                collect (let ((cell-copy (copy-screen-cell cell)))
+                                collect (let ((cell-copy (get-screen-cell-copy cell)))
                                           (setf (screen-cell-style cell-copy)
                                                 (copy-list (screen-cell-style cell)))
                                           cell-copy)))))
@@ -118,7 +124,7 @@
           (osc-escape-p copy) (osc-escape-p terminal))
     copy))
 
-(defun draw-status-line (terminal)
+(defun set-terminal-status-line-drawing (terminal)
   "Draw TERMINAL's status line in its reserved bottom row."
   (let* ((row (aref (terminal-cells terminal)
                     (1- (terminal-height terminal))))
@@ -132,18 +138,18 @@
                    ;; ANSI 30 is black foreground. ANSI 42 is green background.
                    (screen-cell-style (aref row column)) (list 30 42)))))
 
-(defun set-status-line (terminal text)
+(defun set-terminal-status-line (terminal text)
   "Reserve TERMINAL's bottom row and display TEXT there."
   (check-type text string)
   (setf (terminal-status-line terminal) text
         (terminal-content-height terminal)
         (max 1 (1- (terminal-height terminal))))
-  (draw-status-line terminal)
+  (set-terminal-status-line-drawing terminal)
   (setf (cursor-row terminal)
         (min (cursor-row terminal) (1- (terminal-content-height terminal))))
   terminal)
 
-(defun resize-terminal (terminal width height)
+(defun set-terminal-size (terminal width height)
   "Resize TERMINAL and preserve its visible content where possible."
   (check-type width (integer 1))
   (check-type height (integer 1))
@@ -153,13 +159,13 @@
                              (max 1 (1- height))
                              height))
          (old-cells (terminal-cells terminal))
-         (cells (make-blank-screen width height)))
+         (cells (new-terminal-screen width height)))
     (loop for row below (min old-content-height content-height)
           for old-row = (aref old-cells row)
           for new-row = (aref cells row)
           do (loop for column below (min old-width width)
                    do (setf (aref new-row column)
-                            (copy-screen-cell (aref old-row column)))))
+                            (get-screen-cell-copy (aref old-row column)))))
     (setf (terminal-width terminal) width
           (terminal-height terminal) height
           (terminal-content-height terminal) content-height
@@ -173,17 +179,17 @@
           (saved-column terminal)
           (min (saved-column terminal) width))
     (when (terminal-status-line terminal)
-      (draw-status-line terminal)))
+      (set-terminal-status-line-drawing terminal)))
   terminal)
 
-(defun cell-at (terminal row column)
+(defun get-terminal-cell (terminal row column)
   "Return a copy of the cell at one-based ROW and COLUMN."
   (check-type row (integer 1))
   (check-type column (integer 1))
-  (copy-screen-cell
+  (get-screen-cell-copy
    (aref (aref (terminal-cells terminal) (1- row)) (1- column))))
 
-(defun screen-lines (terminal)
+(defun get-terminal-screen-lines (terminal)
   "Return the terminal screen as full-width strings."
   (loop with width = (terminal-width terminal)
         for row across (terminal-cells terminal)
@@ -194,19 +200,19 @@
                                  (screen-cell-character cell)))
                   line)))
 
-(defun cursor-position (terminal)
+(defun get-terminal-cursor-position (terminal)
   "Return the cursor position as one-based row and column values."
   (values (1+ (cursor-row terminal))
           (1+ (min (cursor-column terminal)
                    (1- (terminal-width terminal))))))
 
-(defun clamp (value minimum maximum)
+(defun get-clamped-value (value minimum maximum)
   (max minimum (min value maximum)))
 
-(defun reset-terminal (terminal)
+(defun set-terminal-reset (terminal)
   (let ((status-line (terminal-status-line terminal)))
     (setf (terminal-cells terminal)
-          (make-blank-screen (terminal-width terminal)
+          (new-terminal-screen (terminal-width terminal)
                              (terminal-height terminal))
           (cursor-row terminal) 0
           (cursor-column terminal) 0
@@ -216,43 +222,43 @@
           (osc-escape-p terminal) nil)
     ;; Shell reset sequences must not remove the frontend status line.
     (when status-line
-      (draw-status-line terminal)))
+      (set-terminal-status-line-drawing terminal)))
   terminal)
 
-(defun scroll-up (terminal)
+(defun set-terminal-scroll (terminal)
   (let ((cells (terminal-cells terminal))
         (height (terminal-content-height terminal)))
     (loop for row below (1- height)
           do (setf (aref cells row) (aref cells (1+ row))))
     (setf (aref cells (1- height))
-          (make-blank-row (terminal-width terminal)))))
+          (new-terminal-row (terminal-width terminal)))))
 
-(defun line-feed (terminal)
+(defun set-terminal-line-feed (terminal)
   (if (= (cursor-row terminal) (1- (terminal-content-height terminal)))
-      (scroll-up terminal)
+      (set-terminal-scroll terminal)
       (incf (cursor-row terminal))))
 
-(defun put-character (terminal character)
+(defun set-terminal-character (terminal character)
   (when (>= (cursor-column terminal) (terminal-width terminal))
     (setf (cursor-column terminal) 0)
-    (line-feed terminal))
+    (set-terminal-line-feed terminal))
   (let ((cell (aref (aref (terminal-cells terminal) (cursor-row terminal))
                     (cursor-column terminal))))
     (setf (screen-cell-character cell) character
           (screen-cell-style cell) (copy-list (current-style terminal))))
   (incf (cursor-column terminal)))
 
-(defun move-cursor (terminal row column)
+(defun set-terminal-cursor (terminal row column)
   (setf (cursor-row terminal)
-        (clamp row 0 (1- (terminal-content-height terminal)))
+        (get-clamped-value row 0 (1- (terminal-content-height terminal)))
         (cursor-column terminal)
-        (clamp column 0 (terminal-width terminal))))
+        (get-clamped-value column 0 (terminal-width terminal))))
 
-(defun erase-cell (terminal row column)
+(defun del-terminal-cell (terminal row column)
   (setf (aref (aref (terminal-cells terminal) row) column)
-        (make-screen-cell #\Space nil)))
+        (new-screen-cell #\Space nil)))
 
-(defun erase-line (terminal mode)
+(defun del-terminal-line (terminal mode)
   (let* ((row (cursor-row terminal))
          (start (if (= mode 1) 0 (cursor-column terminal)))
          (end (if (= mode 1)
@@ -261,9 +267,9 @@
     (when (= mode 2)
       (setf start 0 end (1- (terminal-width terminal))))
     (loop for column from start to end
-          do (erase-cell terminal row column))))
+          do (del-terminal-cell terminal row column))))
 
-(defun erase-display (terminal mode)
+(defun del-terminal-display (terminal mode)
   (let ((row (cursor-row terminal))
         (column (cursor-column terminal))
         (height (terminal-content-height terminal))
@@ -272,25 +278,25 @@
       ((= mode 2)
        (loop for screen-row below height
              do (loop for screen-column below width
-                      do (erase-cell terminal screen-row screen-column))))
+                      do (del-terminal-cell terminal screen-row screen-column))))
       ((= mode 1)
        (loop for screen-row from 0 to row
              do (loop for screen-column below width
                       when (or (< screen-row row)
                                (<= screen-column column))
-                        do (erase-cell terminal screen-row screen-column))))
+                        do (del-terminal-cell terminal screen-row screen-column))))
       (t
        (loop for screen-row from row below height
              do (loop for screen-column below width
                       when (or (> screen-row row)
                                (>= screen-column column))
-                        do (erase-cell terminal screen-row screen-column)))))))
+                        do (del-terminal-cell terminal screen-row screen-column)))))))
 
-(defun default-parameter (parameters index default)
+(defun get-csi-default-parameter (parameters index default)
   (let ((value (nth index parameters)))
     (if (or (null value) (zerop value)) default value)))
 
-(defun parse-csi-parameters (buffer)
+(defun get-csi-parameters (buffer)
   (let* ((private (and (plusp (length buffer))
                        (member (char buffer 0) '(#\? #\> #\< #\=))))
          (start (if private 1 0))
@@ -305,7 +311,7 @@
                (setf field-start (1+ index)))
     (values (nreverse values) private)))
 
-(defun style-kind (code)
+(defun get-style-kind (code)
   ;; ANSI SGR assigns these ranges to styles and colors.
   (cond
     ((member code '(1 2 3 4)) :decoration)
@@ -313,7 +319,7 @@
     ((or (<= 40 code 47) (<= 100 code 107)) :background)
     (t nil)))
 
-(defun set-style-code (terminal code)
+(defun set-terminal-style-code (terminal code)
   (cond
     ((= code 0) (setf (current-style terminal) nil))
     ((member code '(22 23 24))
@@ -327,72 +333,72 @@
     ((member code '(39 49))
      (setf (current-style terminal)
            (remove-if (lambda (item)
-                        (eq (style-kind item)
+                        (eq (get-style-kind item)
                             (if (= code 39) :foreground :background)))
                       (current-style terminal))))
     (t
-     (let ((kind (style-kind code)))
+     (let ((kind (get-style-kind code)))
        (when kind
          (setf (current-style terminal)
                (remove-if (lambda (item)
-                            (eq (style-kind item) kind))
+                            (eq (get-style-kind item) kind))
                           (current-style terminal))))
      (pushnew code (current-style terminal) :test #'eql)))))
 
-(defun handle-sgr (terminal parameters)
+(defun set-terminal-sgr (terminal parameters)
   (dolist (code (or parameters '(0)))
-    (set-style-code terminal (or code 0))))
+    (set-terminal-style-code terminal (or code 0))))
 
-(defun handle-csi (terminal final)
+(defun set-terminal-csi (terminal final)
   (multiple-value-bind (parameters private)
-      (parse-csi-parameters (csi-buffer terminal))
+      (get-csi-parameters (csi-buffer terminal))
     (declare (ignore private))
     (case final
-      (#\A (move-cursor terminal
+      (#\A (set-terminal-cursor terminal
                         (- (cursor-row terminal)
-                           (default-parameter parameters 0 1))
+                           (get-csi-default-parameter parameters 0 1))
                         (cursor-column terminal)))
-      (#\B (move-cursor terminal
+      (#\B (set-terminal-cursor terminal
                         (+ (cursor-row terminal)
-                           (default-parameter parameters 0 1))
+                           (get-csi-default-parameter parameters 0 1))
                         (cursor-column terminal)))
-      (#\C (move-cursor terminal
+      (#\C (set-terminal-cursor terminal
                         (cursor-row terminal)
                         (+ (cursor-column terminal)
-                           (default-parameter parameters 0 1))))
-      (#\D (move-cursor terminal
+                           (get-csi-default-parameter parameters 0 1))))
+      (#\D (set-terminal-cursor terminal
                         (cursor-row terminal)
                         (- (cursor-column terminal)
-                           (default-parameter parameters 0 1))))
-      (#\E (move-cursor terminal
+                           (get-csi-default-parameter parameters 0 1))))
+      (#\E (set-terminal-cursor terminal
                         (+ (cursor-row terminal)
-                           (default-parameter parameters 0 1))
+                           (get-csi-default-parameter parameters 0 1))
                         0))
-      (#\F (move-cursor terminal
+      (#\F (set-terminal-cursor terminal
                         (- (cursor-row terminal)
-                           (default-parameter parameters 0 1))
+                           (get-csi-default-parameter parameters 0 1))
                         0))
-      ((#\G #\`) (move-cursor terminal
+      ((#\G #\`) (set-terminal-cursor terminal
                    (cursor-row terminal)
-                   (1- (default-parameter parameters 0 1))))
-      (#\d (move-cursor terminal
-                        (1- (default-parameter parameters 0 1))
+                   (1- (get-csi-default-parameter parameters 0 1))))
+      (#\d (set-terminal-cursor terminal
+                        (1- (get-csi-default-parameter parameters 0 1))
                         (cursor-column terminal)))
-      ((#\H #\f) (move-cursor terminal
-                   (1- (default-parameter parameters 0 1))
-                   (1- (default-parameter parameters 1 1))))
-      (#\J (erase-display terminal (or (first parameters) 0)))
-      (#\K (erase-line terminal (or (first parameters) 0)))
-      (#\m (handle-sgr terminal parameters))
+      ((#\H #\f) (set-terminal-cursor terminal
+                   (1- (get-csi-default-parameter parameters 0 1))
+                   (1- (get-csi-default-parameter parameters 1 1))))
+      (#\J (del-terminal-display terminal (or (first parameters) 0)))
+      (#\K (del-terminal-line terminal (or (first parameters) 0)))
+      (#\m (set-terminal-sgr terminal parameters))
       (#\s (setf (saved-row terminal) (cursor-row terminal)
                   (saved-column terminal) (cursor-column terminal)
                   (saved-style terminal) (copy-list (current-style terminal))))
-      (#\u (move-cursor terminal (saved-row terminal) (saved-column terminal))
+      (#\u (set-terminal-cursor terminal (saved-row terminal) (saved-column terminal))
             (setf (current-style terminal) (copy-list (saved-style terminal))))
       ;; CSI c queries device attributes. It does not reset the screen.
       (#\c nil))))
 
-(defun feed-escape-character (terminal character)
+(defun set-terminal-escape-character (terminal character)
   (case character
     (#\[ (setf (parser-state terminal) :csi
                 (csi-buffer terminal) ""))
@@ -402,14 +408,14 @@
                 (saved-column terminal) (cursor-column terminal)
                 (saved-style terminal) (copy-list (current-style terminal))
                 (parser-state terminal) :ground))
-    (#\8 (move-cursor terminal (saved-row terminal) (saved-column terminal))
+    (#\8 (set-terminal-cursor terminal (saved-row terminal) (saved-column terminal))
           (setf (current-style terminal) (copy-list (saved-style terminal))
                 (parser-state terminal) :ground))
-    (#\c (reset-terminal terminal))
-    (#\D (line-feed terminal)
+    (#\c (set-terminal-reset terminal))
+    (#\D (set-terminal-line-feed terminal)
           (setf (parser-state terminal) :ground))
     (#\E (setf (cursor-column terminal) 0)
-          (line-feed terminal)
+          (set-terminal-line-feed terminal)
           (setf (parser-state terminal) :ground))
     (#\M (if (plusp (cursor-row terminal))
               (decf (cursor-row terminal)))
@@ -417,11 +423,11 @@
     ((#\( #\)) (setf (parser-state terminal) :escape-intermediate))
     (otherwise (setf (parser-state terminal) :ground))))
 
-(defun feed-csi-character (terminal character)
+(defun set-terminal-csi-character (terminal character)
   (let ((code (char-code character)))
     (cond
       ((and (<= #x40 code) (<= code #x7e))
-       (handle-csi terminal character)
+       (set-terminal-csi terminal character)
        (setf (parser-state terminal) :ground
              (csi-buffer terminal) ""))
       ((or (<= #x30 code #x3f)
@@ -434,12 +440,12 @@
       (t (setf (parser-state terminal) :ground
                (csi-buffer terminal) "")))))
 
-(defun feed-terminal-character (terminal character)
+(defun set-terminal-input-character (terminal character)
   (case (parser-state terminal)
     (:ground
      (case character
        (#\Escape (setf (parser-state terminal) :escape))
-       (#\Newline (line-feed terminal))
+       (#\Newline (set-terminal-line-feed terminal))
        (#\Return (setf (cursor-column terminal) 0))
        (#\Backspace (setf (cursor-column terminal)
                            (max 0 (1- (cursor-column terminal)))))
@@ -449,10 +455,10 @@
        (otherwise
         (unless (= (char-code character) +ascii-bell-code+)
           (when (>= (char-code character) #x20)
-            (put-character terminal character))))))
-    (:escape (feed-escape-character terminal character))
+            (set-terminal-character terminal character))))))
+    (:escape (set-terminal-escape-character terminal character))
     (:escape-intermediate (setf (parser-state terminal) :ground))
-    (:csi (feed-csi-character terminal character))
+    (:csi (set-terminal-csi-character terminal character))
     (:osc
      (cond
        ;; SBCL names Unicode U+1F514 "Bell".
@@ -465,17 +471,17 @@
          (setf (parser-state terminal) :ground)
          (setf (parser-state terminal) :osc)))))
 
-(defun feed-terminal (terminal text)
+(defun set-terminal-input (terminal text)
   "Feed decoded UTF-8 terminal text into TERMINAL."
   (check-type text string)
   (loop for character across text
-        do (feed-terminal-character terminal character))
+        do (set-terminal-input-character terminal character))
   terminal)
 
-(defun write-style (stream style)
+(defun set-terminal-style (stream style)
   (write-string (format nil "~C[~{~A~^;~}m" #\Escape style) stream))
 
-(defun render-terminal (terminal)
+(defun get-terminal-render (terminal)
   "Return the screen as ANSI text for the current terminal."
   (with-output-to-string (stream)
     (write-string (format nil "~C[H~C[2J" #\Escape #\Escape) stream)
@@ -486,12 +492,12 @@
                      for cell-style = (screen-cell-style cell)
                      do (unless (equal style cell-style)
                           (if cell-style
-                              (write-style stream cell-style)
-                              (write-style stream '(0)))
+                              (set-terminal-style stream cell-style)
+                              (set-terminal-style stream '(0)))
                           (setf style cell-style))
                         (write-char (screen-cell-character cell) stream))
                (when style
-                 (write-style stream '(0)))
+                 (set-terminal-style stream '(0)))
                (when (< row-index (1- (terminal-height terminal)))
                  (write-string (format nil "~C~C" #\Return #\Newline)
                                stream))))

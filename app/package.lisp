@@ -5,36 +5,43 @@
                 #:make-command
                 #:run)
   (:import-from #:lispore
-                #:attach-session
-                #:close-session-manager
-                #:detach
-                #:find-or-create-session
-                #:install-session-manager-logger
-                #:interactive-shell
-                #:make-session-manager
-                #:manager-debug-enabled-p
-                #:manager-log
-                #:publish-session-output
-                #:lookup-session-by-name
-                #:session-list
-                #:session-id)
+                #:del-current-session
+                #:del-session
+                #:del-session-manager
+                #:del-session-manager-logger
+                #:get-manager-debug-value
+                #:get-manager-debug-enabled-p
+                #:get-session
+                #:get-session-by-name
+                #:get-session-list
+                #:new-session
+                #:new-session-manager
+                #:session-id
+                #:session-name
+                #:set-current-session
+                #:set-interactive-shell
+                #:set-manager-debug-value
+                #:set-manager-log
+                #:set-session-manager-logger
+                #:set-session-published-output)
   (:import-from #:lispore.logging
-                #:close-diagnostic-logger
-                #:make-diagnostic-logger)
+                #:del-diagnostic-logger
+                #:new-diagnostic-logger)
   (:import-from #:lispore.platform
                 #:+pollerr+
                 #:+pollhup+
                 #:+pollin+
                 #:+pollnval+
-                #:call-with-raw-terminal
-                #:poll-fds
-                #:prevent-socket-sigpipe
-                #:read-fd
+                #:del-pty
+                #:get-fd
+                #:get-poll-events
+                #:get-terminal-size
                 #:set-close-on-exec
-                #:terminal-size
-                #:write-fd)
+                #:set-fd
+                #:set-raw-terminal
+                #:set-socket-sigpipe)
   (:import-from #:lispore.utf8
-                #:encode-utf8)
+                #:get-utf8)
   (:import-from #:bordeaux-threads
                 #:make-thread)
   (:export

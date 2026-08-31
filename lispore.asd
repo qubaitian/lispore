@@ -11,7 +11,8 @@
                (:file "src/pty")
                (:file "src/terminal")
                (:file "src/session")
-               (:file "src/frontend"))
+               (:file "src/frontend")
+               (:file "src/api"))
   :in-order-to ((test-op (test-op "lispore/tests"))))
 
 (asdf:defsystem "lispore/app"
@@ -31,7 +32,8 @@
   :serial t
   :components ((:file "tests/package")
                (:file "tests/test")
-               (:file "tests/app-test"))
+               (:file "tests/app-test")
+               (:file "tests/api-test"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
-             (uiop:symbol-call :lispore.tests :run-tests)))
+             (uiop:symbol-call :lispore.tests :set-tests)))

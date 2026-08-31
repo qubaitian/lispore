@@ -1,3 +1,3 @@
 ;;; This file loads after init.
 (asdf:load-system "lispore")
-(lispore:run-passthrough)
+(lispore:set-passthrough-frontend)
