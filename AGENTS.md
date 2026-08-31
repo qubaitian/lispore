@@ -1,4 +1,7 @@
-Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+Read `CONTEXT.md` before exploring.
+Read the ADRs in `docs/adr/` that touch the work.
+Name domain concepts with that glossary.
+Name an ADR conflict before you override it.
 
 Be efficient.
 Write the minimum code that works.
