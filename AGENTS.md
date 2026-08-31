@@ -21,24 +21,10 @@ when you chat, reply, write docs, commit message:
     Put one sentence per line.
     Limit sentences to 12 words.
 
-## SBCL Test Commands
+## Tests
 
-Run every SBCL test in non-interactive batch mode.
-
-Use this command pattern:
+Run tests with `--non-interactive` to keep the debugger off.
 
 ```sh
 sbcl --noinform --non-interactive --load path/to/test.lisp
 ```
-
-The `--non-interactive` option combines `--quit` and `--disable-debugger`.
-
-Exit immediately after the test completes.
-
-On an unhandled error, print the error and backtrace.
-
-Then exit with a non-zero status.
-
-Use `sbcl --script path/to/test.lisp` for standalone test scripts.
-
-Ensure the test runner reports failures through errors or exit codes.
