@@ -11,6 +11,15 @@ Use [OCICL](https://github.com/ocicl/ocicl) for dependencies.
 Legacy OpenSSL may need `USE_LEGACY_OPENSSL=1`.
 Then run `sbcl --load setup.lisp`.
 
+## Test
+
+Run the test suite from the repository root.
+
+```sh
+sbcl --noinform --non-interactive --load init \
+  --eval '(asdf:test-system "lispore")'
+```
+
 ## Build
 
 Build the standalone command from the repository root.
