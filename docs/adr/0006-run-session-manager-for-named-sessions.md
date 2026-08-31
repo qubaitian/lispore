@@ -1,6 +1,8 @@
 # Run a session manager for named sessions
 
 Lispore uses a long-lived session manager to own shell sessions across command invocations.
+The command surface described here is superseded by ADR-0008.
+The manager lifetime, scope, socket, and restart decisions remain.
 The bare `lispore` command starts the manager when necessary, displays the session list, and exits without attaching.
 The `lispore <session-name>` command starts the manager when necessary, atomically finds or creates the named session, then attaches the command frontend.
 All commands use the same manager when it already exists.

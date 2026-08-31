@@ -129,6 +129,11 @@ _Avoid_: session close, termination
 A new attachment to an existing running shell session.
 _Avoid_: session restart
 
+**Current session**:
+The Session selected by one terminal frontend.
+`set` enters it or switches to it.
+_Avoid_: attached session
+
 **Retained display**:
 Screen contents that remain available after detachment or session termination.
 _Avoid_: cleared screen
@@ -172,3 +177,33 @@ _Avoid_: debugger mode
 **Diagnostic log**:
 A complete record of Lispore events, submitted input, and error reports.
 _Avoid_: shell output
+
+## Data API
+
+**Data operation**:
+One of `new`, `set`, `get`, or `del` that manages one value position.
+_Avoid_: command
+
+**Value position**:
+An address that contains one non-`nil` value or no value.
+_Avoid_: empty object
+
+**Missing position**:
+A value position with no value.
+Only `new` may create a missing position.
+_Avoid_: empty value
+
+**Existing position**:
+A value position with a non-`nil` value.
+Only `set`, `get`, and `del` may use an existing position.
+_Avoid_: occupied value
+
+**Protected position**:
+An existing value position that `del` cannot remove.
+Debug is a protected position.
+_Avoid_: immutable value
+
+**Control position**:
+A reserved value position that controls terminal frontend behavior.
+`current-session` accepts `set` when it enters or switches a Session.
+_Avoid_: data position

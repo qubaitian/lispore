@@ -6,7 +6,7 @@ SBCL reports conditions and backtraces without entering the debugger.
 
 ## Status
 
-accepted
+superseded by ADR-0008
 
 ## Considered Options
 
