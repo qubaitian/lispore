@@ -23,7 +23,7 @@ coverage/
 *.tsbuildinfo
 
 # Skill
-.agents/
+# .agents/
 skills-lock.json
 
 # Generated dependency tree.

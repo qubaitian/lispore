@@ -45,6 +45,19 @@ It reuses `s1` when it already exists.
 The manager stays alive after the command exits.
 The command provides `--help` and `--version` through Clingon.
 
+Enable diagnostic logging for the existing session manager.
+
+```sh
+./bin/lispore debug
+tail -f ~/.lispore/debug.log
+```
+
+Debug mode keeps normal terminal output.
+It also shows Lispore diagnostic records in active sessions.
+The log includes submitted input, errors, and SBCL backtraces.
+Debug mode stays active until the manager exits.
+SBCL errors do not enter the interactive debugger.
+
 Passthrough mode forwards terminal bytes without interpretation.
 It preserves ANSI control sequences and UTF-8 text.
 Managed frontends reserve the bottom row for a status line.

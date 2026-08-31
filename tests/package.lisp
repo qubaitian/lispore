@@ -30,6 +30,7 @@
                 #:interrupt-execution
                 #:input-draft
                 #:input-history
+                #:install-session-manager-logger
                 #:lookup-session
                 #:lookup-session-by-name
                 #:make-session-manager
@@ -72,6 +73,10 @@
   (:import-from #:lispore.utf8
                 #:decode-utf8-chunk
                 #:encode-utf8)
+  (:import-from #:lispore.logging
+                #:close-diagnostic-logger
+                #:log-diagnostic-event
+                #:make-diagnostic-logger)
   (:import-from #:lispore.platform
                 #:call-with-raw-terminal
                 #:close-pty

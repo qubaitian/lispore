@@ -5,6 +5,7 @@
   :serial t
   :components ((:file "src/package")
                (:file "src/utf8")
+               (:file "src/logging")
                (:file "src/input")
                (:file "src/platform")
                (:file "src/pty")

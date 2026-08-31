@@ -162,3 +162,13 @@ _Avoid_: ASCII text
 **ANSI control sequence**:
 A byte sequence that changes terminal display or cursor state.
 _Avoid_: escape string
+
+## Diagnostics
+
+**Debug mode**:
+A mode that exposes Lispore internal events and failures during session use.
+_Avoid_: debugger mode
+
+**Diagnostic log**:
+A complete record of Lispore events, submitted input, and error reports.
+_Avoid_: shell output

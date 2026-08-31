@@ -9,10 +9,18 @@
                 #:close-session-manager
                 #:detach
                 #:find-or-create-session
+                #:install-session-manager-logger
                 #:interactive-shell
                 #:make-session-manager
+                #:manager-debug-enabled-p
+                #:manager-log
+                #:publish-session-output
+                #:lookup-session-by-name
                 #:session-list
                 #:session-id)
+  (:import-from #:lispore.logging
+                #:close-diagnostic-logger
+                #:make-diagnostic-logger)
   (:import-from #:lispore.platform
                 #:+pollerr+
                 #:+pollhup+

@@ -7,4 +7,11 @@
     (check (string= "0.1.0" (clingon:command-version command))
            "The application command has the wrong version.")
     (check (functionp (clingon:command-handler command))
-           "The application command has no handler.")))
+           "The application command has no handler.")
+    (let ((debug-command (first (clingon:command-sub-commands command))))
+      (check debug-command
+             "The application command has no debug subcommand.")
+      (check (string= "debug" (clingon:command-name debug-command))
+             "The debug subcommand has the wrong name.")
+      (check (functionp (clingon:command-handler debug-command))
+             "The debug subcommand has no handler."))))

@@ -4,11 +4,19 @@
 (defparameter +manager-connect-attempts+ 100)
 (defparameter +manager-connect-delay+ 0.05)
 (defparameter +manager-socket-name+ "manager.sock")
+(defparameter +manager-debug-command+ "DEBUG")
+(defparameter +manager-debug-log-name+ "debug.log")
 
 (defun manager-socket-path ()
   "Return the per-user manager socket path."
   (merge-pathnames
    (format nil ".lispore/~A" +manager-socket-name+)
+   (user-homedir-pathname)))
+
+(defun manager-debug-log-path ()
+  "Return the per-user diagnostic log path."
+  (merge-pathnames
+   (format nil ".lispore/~A" +manager-debug-log-name+)
    (user-homedir-pathname)))
 
 (defun manager-socket-fd (socket)
@@ -131,6 +139,54 @@
              (session-state-name (cdr entry)))))
   (write-protocol-line fd "END"))
 
+(defun broadcast-manager-log (manager record)
+  "Publish RECORD to every active named session."
+  (dolist (entry (session-list manager))
+    (let ((session (lookup-session-by-name manager (car entry))))
+      (when session
+        (ignore-errors
+          (publish-session-output
+           session
+           (format nil "~%[lispore debug]~%~A" record)))))))
+
+(defun open-manager-debug-log ()
+  "Open the append-only per-user diagnostic log."
+  (let ((path (manager-debug-log-path)))
+    (ensure-directories-exist path)
+    (values (open path
+                  :direction :output
+                  :if-exists :append
+                  :if-does-not-exist :create
+                  :external-format :utf-8)
+            path)))
+
+(defun enable-manager-debug (manager)
+  "Enable diagnostic logging on MANAGER and return its log path."
+  (let ((path (manager-debug-log-path)))
+    (unless (manager-debug-enabled-p manager)
+      (multiple-value-bind (stream log-path)
+          (open-manager-debug-log)
+        (let ((logger
+                (make-diagnostic-logger
+                 stream
+                 (lambda (record)
+                   (broadcast-manager-log manager record)))))
+          (let ((installed (install-session-manager-logger manager logger)))
+            (unless (eq installed logger)
+              (close-diagnostic-logger logger))))
+        (setf path log-path)))
+    (manager-log manager
+                 "debug-enabled"
+                 :message (namestring path))
+    path))
+
+(defun handle-debug-request (fd parts manager)
+  "Enable manager diagnostics and acknowledge the request."
+  (unless (protocol-command-p parts +manager-debug-command+ 1)
+    (error "The manager received an invalid DEBUG request."))
+  (enable-manager-debug manager)
+  (write-protocol-line fd "READY"))
+
 (defun handle-open-request (fd parts manager)
   "Create or attach the requested named session."
   (unless (protocol-command-p parts "OPEN" 4)
@@ -171,18 +227,43 @@
              (let ((parts (uiop:split-string line)))
                (cond
                  ((protocol-command-p parts "PING" 1)
+                  (manager-log manager "manager-request" :message line)
                   (write-protocol-line fd "PONG"))
                  ((protocol-command-p parts "LIST" 1)
+                  (manager-log manager "manager-request" :message line)
                   (handle-list-request fd manager))
+                 ((protocol-command-p parts +manager-debug-command+ 1)
+                  (handler-case
+                      (progn
+                        (handle-debug-request fd parts manager)
+                        (manager-log manager "manager-request" :message line))
+                    (error (condition)
+                      (ignore-errors
+                        (manager-log manager
+                                     "manager-error"
+                                     :message line
+                                     :condition condition))
+                      (ignore-errors
+                        (write-protocol-line
+                         fd
+                         (format nil "ERROR ~A" condition))))))
                  ((protocol-command-p parts "OPEN" 4)
                   (handler-case
-                      (handle-open-request fd parts manager)
+                      (progn
+                        (manager-log manager "manager-request" :message line)
+                        (handle-open-request fd parts manager))
                     (error (condition)
+                      (ignore-errors
+                        (manager-log manager
+                                     "manager-error"
+                                     :message line
+                                     :condition condition))
                       (ignore-errors
                         (write-protocol-line
                          fd
                          (format nil "ERROR ~A" condition))))))
                  (t
+                  (manager-log manager "manager-error" :message line)
                   (write-protocol-line fd "ERROR Invalid manager request.")))))
       (close-manager-socket socket)))))
 
@@ -226,10 +307,18 @@
                   (lambda ()
                     (handler-case
                         (handle-manager-client client manager)
-                      (error ()
+                      (error (condition)
+                        (ignore-errors
+                          (manager-log manager
+                                       "manager-client-error"
+                                       :condition condition))
                         (close-manager-socket client))))
                   :name "lispore manager client"))
-             (error ()
+             (error (condition)
+               (ignore-errors
+                 (manager-log manager
+                              "manager-client-error"
+                              :condition condition))
                (close-manager-socket client))))))
 
 (defun run-manager-server ()
@@ -238,7 +327,14 @@
     (when listener
       (let ((manager (make-session-manager)))
         (unwind-protect
-             (run-manager-accept-loop listener manager)
+             (handler-case
+                 (run-manager-accept-loop listener manager)
+               (error (condition)
+                 (ignore-errors
+                   (manager-log manager
+                                "manager-server-error"
+                                :condition condition))
+                 (error condition)))
           (close-manager-socket listener)
           (ignore-errors (delete-file (manager-socket-path)))
           (close-session-manager manager))))))
@@ -272,6 +368,23 @@
         (error (condition)
           (close-manager-socket socket)
           (error condition))))))
+
+(defun request-manager-debug ()
+  "Enable diagnostics on the existing manager and return its log path."
+  (let* ((socket (ensure-manager-connection))
+         (fd (manager-socket-fd socket)))
+    (unwind-protect
+         (progn
+           (write-protocol-line fd +manager-debug-command+)
+           (let ((response (read-protocol-line fd)))
+             (cond
+               ((and response (string= response "READY"))
+                (manager-debug-log-path))
+               ((and response (uiop:string-prefix-p "ERROR " response))
+                (error "~A" (subseq response (length "ERROR "))))
+               (t
+                (error "The manager rejected the debug request.")))))
+      (close-manager-socket socket))))
 
 (defun socket-event-readable-p (events fd)
   "Return true when FD has readable or terminal events."

@@ -31,6 +31,9 @@
    (cleanup-thread
     :initform nil
     :accessor manager-cleanup-thread)
+   (logger
+    :initform nil
+    :accessor manager-logger)
    (closed-p
     :initform nil
     :accessor manager-closed-p))
@@ -188,6 +191,45 @@
            (lambda () (run-session-cleaner manager))
            :name "lispore session cleanup"))
     manager))
+
+(defun install-session-manager-logger (manager logger)
+  "Install LOGGER unless MANAGER already has one."
+  (check-type manager session-manager)
+  (check-type logger lispore.logging:diagnostic-logger)
+  (with-lock-held ((manager-lock manager))
+    (unless (manager-closed-p manager)
+      (or (manager-logger manager)
+          (setf (manager-logger manager) logger)))))
+
+(defun manager-debug-enabled-p (manager)
+  "Return true when MANAGER writes diagnostic records."
+  (check-type manager session-manager)
+  (with-lock-held ((manager-lock manager))
+    (not (null (manager-logger manager)))))
+
+(defun manager-log (manager event &key session-name session-id message input condition)
+  "Write EVENT when MANAGER has diagnostic logging enabled."
+  (check-type manager session-manager)
+  (let ((logger (manager-logger manager)))
+    (when logger
+      (log-diagnostic-event logger
+                            event
+                            :session-name session-name
+                            :session-id session-id
+                            :message message
+                            :input input
+                            :condition condition))))
+
+(defun session-log (session event &key message input condition)
+  "Write EVENT with SESSION context without affecting session work."
+  (ignore-errors
+    (manager-log (session-manager session)
+                 event
+                 :session-name (session-name session)
+                 :session-id (session-id session)
+                 :message message
+                 :input input
+                 :condition condition)))
 
 (defun current-shell ()
   "Return the shell selected by the environment."
@@ -432,6 +474,11 @@
                (setf (gethash name (manager-named-sessions manager))
                      managed-session)))
            (setf success-p t)
+           (session-log managed-session
+                        "session-start"
+                        :message (format nil "mode=~A shell=~A"
+                                         mode
+                                         shell))
            session-id)
       (unless success-p
         (when managed-session
@@ -534,24 +581,30 @@
     (error "Attachment mode must be :PASSTHROUGH or :COMMAND."))
   (let ((session (lookup-session manager session-id)))
     (when session
-      (with-lock-held ((session-lock session))
-        (unless (eq (eq mode :command)
-                    (command-mode-p session))
-          (error "Attachment mode does not match the session mode."))
-        (when (session-running-under-lock-p session)
-          (let* ((start-screen (copy-terminal (managed-terminal session)))
-                 (attachment
-                   (make-instance 'attachment
-                                  :session session
-                                  :start-screen start-screen
-                                  :mode mode
-                                  :input-editor
-                                  (make-input-editor
-                                   :history (session-input-history session))
-                                  :max-buffer-bytes
-                                  (manager-max-buffer-bytes manager))))
-            (push attachment (session-attachments session))
-            (values attachment (copy-terminal start-screen))))))))
+      (multiple-value-bind (attachment screen)
+          (with-lock-held ((session-lock session))
+            (unless (eq (eq mode :command)
+                        (command-mode-p session))
+              (error "Attachment mode does not match the session mode."))
+            (when (session-running-under-lock-p session)
+              (let* ((start-screen (copy-terminal (managed-terminal session)))
+                     (attachment
+                       (make-instance 'attachment
+                                      :session session
+                                      :start-screen start-screen
+                                      :mode mode
+                                      :input-editor
+                                      (make-input-editor
+                                       :history (session-input-history session))
+                                      :max-buffer-bytes
+                                      (manager-max-buffer-bytes manager))))
+                (push attachment (session-attachments session))
+                (values attachment (copy-terminal start-screen)))))
+        (when attachment
+          (session-log session
+                       "session-attach"
+                       :message (format nil "mode=~A" mode)))
+        (values attachment screen)))))
 
 (defun restore-session (manager session-id &key (mode :command))
   "Reattach to a running session and return its retained screen."
@@ -574,15 +627,19 @@
   "Remove ATTACHMENT without closing its shell session."
   (check-type attachment attachment)
   (let ((session (attachment-session attachment)))
-    (with-lock-held ((session-lock session))
-      (when (managed-attachment-attached-p attachment)
-        (setf (managed-attachment-attached-p attachment) nil
-              (attachment-buffer attachment) nil
-              (attachment-buffer-bytes attachment) 0)
-        (input-editor-clear-draft-history (attachment-input-editor attachment))
-        (remove-attachment attachment)
-        (condition-notify (attachment-condition attachment))
-        t))))
+    (let ((detached-p nil))
+      (with-lock-held ((session-lock session))
+        (when (managed-attachment-attached-p attachment)
+          (setf (managed-attachment-attached-p attachment) nil
+                (attachment-buffer attachment) nil
+                (attachment-buffer-bytes attachment) 0)
+          (input-editor-clear-draft-history (attachment-input-editor attachment))
+          (remove-attachment attachment)
+          (condition-notify (attachment-condition attachment))
+          (setf detached-p t)))
+      (when detached-p
+        (session-log session "session-detach"))
+      detached-p)))
 
 (defun append-attachment-output (attachment bytes)
   "Queue BYTES, or disconnect ATTACHMENT after overflow."
@@ -876,6 +933,10 @@
       (error (condition)
         (setf termination-condition condition)))
     (mark-session-terminated session termination-condition)
+    (session-log session
+                 "session-terminated"
+                 :message (if termination-condition "error" "eof")
+                 :condition termination-condition)
     (close-managed-shell-session session)))
 
 (defun dequeue-attachment-output (attachment max-bytes)
@@ -1003,6 +1064,7 @@
                                     (input-editor-text
                                      (attachment-input-editor attachment)))))))
                (when accepted-p
+                 (session-log session "input-submit" :input value)
                  (handler-case
                      (progn
                        (with-lock-held ((session-write-lock session))
@@ -1013,7 +1075,12 @@
                          (input-editor-clear
                           (attachment-input-editor attachment)))
                        t)
-                   (error () nil))))
+                   (error (condition)
+                     (session-log session
+                                  "input-error"
+                                  :input value
+                                  :condition condition)
+                     nil))))
           (release-lock (session-input-lock session)))))))
 
 (defun valid-command-kind-p (kind)
@@ -1030,7 +1097,8 @@
     (return-from submit-command nil))
   (unless (member (input-completeness input) '(:complete :error) :test #'eq)
     (return-from submit-command nil))
-  (let ((session (attachment-session attachment)))
+  (let ((session (attachment-session attachment))
+        (accepted-p nil))
     (with-lock-held ((session-lock session))
       (let* ((editor (attachment-input-editor attachment))
              (draft (input-editor-text editor)))
@@ -1058,7 +1126,13 @@
           ;; Clear the accepted draft before the worker can report an error.
           (input-editor-clear editor)
           (condition-notify (execution-condition session))
-          t)))))
+          (setf accepted-p t))))
+    (when accepted-p
+      (session-log session
+                   "command-submit"
+                   :message (format nil "kind=~A" kind)
+                   :input input))
+    accepted-p))
 
 (defun interrupt-execution (object)
   "Interrupt the active command for OBJECT, if one exists."
@@ -1092,6 +1166,9 @@
                thread
                (lambda ()
                  (throw +execution-interrupt-tag+ :interrupted))))))
+      (session-log session
+                   "execution-interrupt"
+                   :message (format nil "kind=~A" kind))
       t)))
 
 (defun next-execution-marker (session)
@@ -1102,7 +1179,8 @@
 
 (defun run-shell-command (session attachment input)
   "Run INPUT through SESSION's persistent shell."
-  (let ((token (next-execution-marker session)))
+  (let ((token (next-execution-marker session))
+        (command-condition nil))
     (with-lock-held ((session-lock session))
       (when (session-running-under-lock-p session)
         (setf (execution-marker session) token
@@ -1133,14 +1211,25 @@
             (loop while (and (session-running-under-lock-p session)
                              (eq (managed-execution-state session) :running))
                   do (condition-wait (execution-condition session)
-                                     (session-lock session))))))
+                                     (session-lock session)))
+            (setf command-condition (managed-execution-error session)))
+          (when command-condition
+            (session-log session
+                         "command-error"
+                         :input input
+                         :condition command-condition))))
       (error (condition)
         (with-lock-held ((session-lock session))
           (record-command-error-under-lock
            attachment
            input
            condition)
-          (finish-execution-under-lock session condition))))))
+          (finish-execution-under-lock session condition))
+        (setf command-condition condition)
+        (session-log session
+                     "command-error"
+                     :input input
+                     :condition command-condition)))))
 
 (defun evaluate-lisp-command (session input)
   "Evaluate INPUT in SESSION's persistent user package."
@@ -1176,6 +1265,10 @@
                    attachment
                    input
                    caught-condition))
+                (session-log session
+                             "command-error"
+                             :input input
+                             :condition caught-condition)
                 (publish-session-output
                  session
                  (format nil "Error: ~A~%" caught-condition))
@@ -1204,10 +1297,23 @@
                               (setf (execution-job-started-p session) t)
                               t)))))
                 (if run-p
-                    (ecase kind
-                      (:lisp (run-lisp-command session attachment input))
-                      (:shell (run-shell-command session attachment input)))
                     (progn
+                      (session-log session
+                                   "command-start"
+                                   :message (format nil "kind=~A" kind)
+                                   :input input)
+                      (ecase kind
+                        (:lisp (run-lisp-command session attachment input))
+                        (:shell (run-shell-command session attachment input)))
+                      (session-log session
+                                   "command-finish"
+                                   :message (format nil "kind=~A" kind)
+                                   :input input))
+                    (progn
+                      (session-log session
+                                   "command-interrupted"
+                                   :message (format nil "kind=~A" kind)
+                                   :input input)
                       (publish-session-output
                        session
                        (format nil "Execution interrupted.~%"))
@@ -1241,7 +1347,11 @@
                 (first job)
                 (second job)
                 condition)
-               (finish-execution-under-lock session condition)))))))
+               (finish-execution-under-lock session condition))
+             (session-log session
+                          "execution-worker-error"
+                          :input (second job)
+                          :condition condition))))))
 
 (defun terminate-managed-session (session)
   "Terminate SESSION and wait for its reader thread."
@@ -1277,11 +1387,14 @@
 (defun close-session-manager (manager)
   "Terminate every session and stop the in-process registry."
   (check-type manager session-manager)
+  (manager-log manager "manager-close")
   (let ((sessions nil)
-        (cleanup-thread nil))
+        (cleanup-thread nil)
+        (logger nil))
     (with-lock-held ((manager-lock manager))
       (setf (manager-closed-p manager) t)
-      (setf cleanup-thread (manager-cleanup-thread manager))
+      (setf cleanup-thread (manager-cleanup-thread manager)
+            logger (manager-logger manager))
       (maphash (lambda (id session)
                  (declare (ignore id))
                  (push session sessions))
@@ -1292,5 +1405,9 @@
       (ignore-errors (join-thread cleanup-thread)))
     (with-lock-held ((manager-lock manager))
       (clrhash (manager-sessions manager))
-      (clrhash (manager-named-sessions manager)))
+      (clrhash (manager-named-sessions manager))
+      (when (eq logger (manager-logger manager))
+        (setf (manager-logger manager) nil)))
+    (when logger
+      (close-diagnostic-logger logger))
     t))

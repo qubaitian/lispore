@@ -45,6 +45,89 @@
     for bytes = (read-attachment attachment :wait-p nil)
     while (and bytes (plusp (length bytes)))))
 
+(deftest diagnostic-logger-keeps-complete-events ()
+  (let ((stream (make-string-output-stream))
+        (records nil)
+        (records-lock (make-lock "diagnostic logger test")))
+    (let ((logger
+            (make-diagnostic-logger
+             stream
+             (lambda (record)
+               (with-lock-held (records-lock)
+                 (push record records))))))
+      (unwind-protect
+           (progn
+             (check (log-diagnostic-event
+                     logger
+                     "command-error"
+                     :session-id "session-1"
+                     :session-name "s2"
+                     :message "evaluation failed"
+                     :input "(error \"boom\")"
+                     :condition
+                     (make-condition 'simple-error
+                                     :format-control "boom"
+                                     :format-arguments nil))
+                    "The diagnostic logger rejects a complete event.")
+             (check (wait-until
+                     (lambda ()
+                       (with-lock-held (records-lock)
+                         (not (null records)))))
+                    "The diagnostic logger does not broadcast its event.")
+             (let ((text (get-output-stream-string stream)))
+               (check (search "event=command-error" text)
+                      "The diagnostic log omits the event name.")
+               (check (search "session-name=s2" text)
+                      "The diagnostic log omits the session name.")
+               (check (search "input-begin" text)
+                      "The diagnostic log omits submitted input.")
+               (check (search "(error \"boom\")" text)
+                      "The diagnostic log truncates submitted input.")
+               (check (search "backtrace-begin" text)
+                      "The diagnostic log omits the SBCL backtrace.")))
+        (close-diagnostic-logger logger)))))
+
+(deftest command-errors-keep-running-and-write-diagnostics ()
+  (let ((manager (make-session-manager :retention-seconds 5))
+        (stream (make-string-output-stream)))
+    (let ((logger
+            (make-diagnostic-logger
+             stream
+             (lambda (record)
+               (declare (ignore record))))))
+      (check (eq logger (install-session-manager-logger manager logger))
+             "The manager rejects its diagnostic logger.")
+      (unwind-protect
+           (let* ((session-id (start-session manager
+                                              :shell "/bin/sh"
+                                              :mode :command
+                                              :width 40
+                                              :height 6))
+                  (session (lookup-session manager session-id))
+                  (attachment (attach-session manager
+                                               session-id
+                                               :mode :command)))
+             (set-input-draft attachment "(error \"boom\")")
+             (check (submit-command attachment
+                                     (input-draft attachment)
+                                     :lisp)
+                    "The command frontend rejects an error form.")
+             (set-input-draft attachment "")
+             (check (wait-until
+                     (lambda ()
+                       (and (eq :ready (execution-state session))
+                            (screen-has-text-p (attachment-screen attachment)
+                                               "Error: boom"))))
+                    "The SBCL error does not return the session to ready.")
+             (let ((text (get-output-stream-string stream)))
+               (check (search "event=command-error" text)
+                      "The command error is absent from diagnostics.")
+               (check (search "(error \"boom\")" text)
+                      "The diagnostic input is incomplete.")
+               (check (search "backtrace-begin" text)
+                      "The command error has no backtrace.")))
+        (close-session-manager manager)))))
+
 (defun make-test-pipe ()
   "Return readable and writable descriptors for a test pipe."
   (cffi:with-foreign-object (descriptors :int 2)

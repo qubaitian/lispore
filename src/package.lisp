@@ -25,6 +25,24 @@
    #:decode-utf8-chunk
    #:encode-utf8))
 
+(defpackage #:lispore.logging
+  (:use #:cl)
+  (:import-from #:bordeaux-threads
+                #:condition-notify
+                #:condition-wait
+                #:current-thread
+                #:join-thread
+                #:make-condition-variable
+                #:make-lock
+                #:make-thread
+                #:thread-name
+                #:with-lock-held)
+  (:export
+   #:close-diagnostic-logger
+   #:diagnostic-logger
+   #:log-diagnostic-event
+   #:make-diagnostic-logger))
+
 (defpackage #:lispore.input
   (:use #:cl)
   (:import-from #:lispore.utf8
@@ -117,6 +135,9 @@
                 #:input-editor-text
                 #:input-language
                 #:make-input-editor)
+  (:import-from #:lispore.logging
+                #:close-diagnostic-logger
+                #:log-diagnostic-event)
   (:import-from #:lispore.pty
                 #:close-session
                 #:read-output-bytes
@@ -148,9 +169,12 @@
    #:input-cursor
    #:input-history
    #:find-or-create-session
+   #:install-session-manager-logger
    #:lookup-session
    #:lookup-session-by-name
    #:make-session-manager
+   #:manager-debug-enabled-p
+   #:manager-log
    #:read-attachment
    #:retained-screen
    #:restore-session
@@ -255,9 +279,13 @@
                 #:input-cursor
                 #:input-history
                 #:find-or-create-session
+                #:install-session-manager-logger
                 #:lookup-session
                 #:lookup-session-by-name
                 #:make-session-manager
+                #:manager-debug-enabled-p
+                #:manager-log
+                #:publish-session-output
                 #:read-attachment
                 #:retained-screen
                 #:restore-session
@@ -304,13 +332,17 @@
    #:input-cursor
    #:input-history
    #:find-or-create-session
+   #:install-session-manager-logger
    #:interrupt-execution
    #:interactive-shell
    #:lookup-session
    #:lookup-session-by-name
    #:make-terminal-emulator
    #:make-session-manager
+   #:manager-debug-enabled-p
+   #:manager-log
    #:pty-master
+   #:publish-session-output
    #:read-output
    #:read-output-bytes
    #:read-attachment
